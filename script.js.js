@@ -4,7 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const botoesComprar = document.querySelectorAll('.btn-comprar');
 
     // Número de WhatsApp para onde a mensagem será enviada
-    const numeroWhatsApp = '55SEUNUMERO'; // <-- COLOQUE SEU NÚMERO AQUI
+    const numeroWhatsApp = '5551995755473'; // <-- COLOQUE SEU NÚMERO AQUI
 
     botoesComprar.forEach(botao => {
         botao.addEventListener('click', () => {
