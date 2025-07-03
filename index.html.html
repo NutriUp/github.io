@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NUTRI UP - Potencialize seu Treino</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600&family=Lato:wght@400;700&display=swap" rel="stylesheet">
+    
+    <!-- Font Awesome (para ícones) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"/>
+
+    <!-- Nosso CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- CABEÇALHO -->
+    <header>
+        <div class="container">
+            <a href="#" class="logo">NUTRI <span>UP</span></a>
+            <nav>
+                <a href="#banner">Início</a>
+                <a href="#produtos">Produtos</a>
+                <a href="#sobre">Sobre Nós</a>
+                <a href="https://wa.me/55SEUNUMERO" target="_blank">Contato</a>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <!-- SEÇÃO BANNER -->
+        <section id="banner">
+            <div class="container">
+                <div class="banner-text">
+                    <h1>COMBO FORÇA TOTAL</h1>
+                    <p>Leve Whey Protein + Creatina + Pré-Treino e economize. O kit completo para você atingir o próximo nível.</p>
+                    <a href="#produtos" class="btn-principal">Ver Combos Agora</a>
+                </div>
+            </div>
+        </section>
+
+        <!-- SEÇÃO VANTAGENS -->
+        <section id="vantagens">
+            <div class="container">
+                <div class="vantage-item">
+                    <i class="fas fa-truck-fast"></i>
+                    <h3>Entrega Rápida</h3>
+                    <p>Receba seus produtos com agilidade.</p>
+                </div>
+                <div class="vantage-item">
+                    <i class="fab fa-whatsapp"></i>
+                    <h3>Compra Segura</h3>
+                    <p>Atendimento direto e seguro via WhatsApp.</p>
+                </div>
+                <div class="vantage-item">
+                    <i class="fas fa-medal"></i>
+                    <h3>Qualidade Premium</h3>
+                    <p>Matéria-prima importada e certificada.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- SEÇÃO PRODUTOS -->
+        <section id="produtos">
+            <div class="container">
+                <h2>Nossos Produtos</h2>
+                <div class="produtos-grid">
+                    <!-- Produto 1: Combo -->
+                    <div class="produto-card">
+                        <img src="images/combo.png" alt="Combo Força Total"> <!-- Crie essa imagem no Canva! -->
+                        <h3>Combo Força Total</h3>
+                        <p class="produto-descricao">Whey + Creatina + Pré-Treino</p>
+                        <div class="produto-preco">
+                            <span class="preco-antigo">R$ 299,90</span>
+                            <span class="preco-novo">R$ 249,90</span>
+                        </div>
+                        <button class="btn-comprar" data-produto="Combo Força Total" data-preco="249.90">Comprar via WhatsApp</button>
+                    </div>
+
+                    <!-- Produto 2: Whey -->
+                    <div class="produto-card">
+                        <img src="images/whey.png" alt="Whey Protein"> <!-- Crie essa imagem no Canva! -->
+                        <h3>Whey Protein Concentrado</h3>
+                        <p class="produto-descricao">25g de proteína por dose</p>
+                        <div class="produto-preco">
+                            <span class="preco-novo">R$ 99,90</span>
+                        </div>
+                        <button class="btn-comprar" data-produto="Whey Protein Concentrado" data-preco="99.90">Comprar via WhatsApp</button>
+                    </div>
+
+                    <!-- Produto 3: Creatina -->
+                    <div class="produto-card">
+                        <img src="images/creatina.png" alt="Creatina"> <!-- Crie essa imagem no Canva! -->
+                        <h3>Creatina Monohidratada</h3>
+                        <p class="produto-descricao">100% Pura - Aumente sua força</p>
+                        <div class="produto-preco">
+                            <span class="preco-novo">R$ 79,90</span>
+                        </div>
+                        <button class="btn-comprar" data-produto="Creatina Monohidratada" data-preco="79.90">Comprar via WhatsApp</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- SEÇÃO SOBRE -->
+        <section id="sobre">
+            <div class="container">
+                <div class="sobre-imagem">
+                     <img src="images/academia.jpg" alt="Pessoa treinando"> <!-- Imagem do Unsplash/Pexels -->
+                </div>
+                <div class="sobre-texto">
+                    <h2>SOBRE A <span>NUTRI UP</span></h2>
+                    <p>Nascemos da paixão pelo esporte e da busca incessante por resultados. A NUTRI UP não é apenas uma marca de suplementos, é sua parceira de treino. Usamos apenas os melhores ingredientes para garantir que você tenha a energia, a força e a recuperação que precisa para superar seus limites.</p>
+                    <p>Nosso compromisso é com a transparência e a qualidade. Junte-se a nós e vamos crescer juntos. #GoUp</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- RODAPÉ -->
+    <footer>
+        <div class="container">
+            <div class="footer-col">
+                <h3>NUTRI <span>UP</span></h3>
+                <p>Potencialize seu treino.</p>
+            </div>
+            <div class="footer-col">
+                <h4>Links Rápidos</h4>
+                <a href="#banner">Início</a>
+                <a href="#produtos">Produtos</a>
+                <a href="#sobre">Sobre Nós</a>
+            </div>
+            <div class="footer-col">
+                <h4>Contato</h4>
+                <p>Atendimento via WhatsApp</p>
+                <div class="social-icons">
+                    <a href="https://instagram.com/seu-usuario" target="_blank"><i class="fab fa-instagram"></i></a>
+                    <a href="https://facebook.com/seu-usuario" target="_blank"><i class="fab fa-facebook"></i></a>
+                    <a href="https://wa.me/55SEUNUMERO" target="_blank"><i class="fab fa-whatsapp"></i></a>
+                </div>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2024 NUTRI UP. Todos os direitos reservados.</p>
+        </div>
+    </footer>
+
+    <!-- Nosso JavaScript -->
+    <script src="script.js"></script>
+</body>
+</html>
