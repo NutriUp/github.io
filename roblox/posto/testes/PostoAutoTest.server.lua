@@ -56,6 +56,13 @@ local Npc = require(S.Npc)
 local Customers = require(S.Customers)
 local runtime = workspace:WaitForChild("PostoRuntime")
 
+-- fila: os roteiros movem o jogador e iniciam missões; dois ao mesmo tempo atrapalham um ao outro
+while workspace:GetAttribute("TesteAutomaticoEmExecucao") do
+	print("[TESTE POSTO] aguardando outro roteiro terminar: " .. tostring(workspace:GetAttribute("TesteAutomaticoEmExecucao")))
+	task.wait(3)
+end
+workspace:SetAttribute("TesteAutomaticoEmExecucao", "POSTO")
+char = player.Character or player.CharacterAdded:Wait()
 print("[TESTE POSTO] ===== início =====")
 -- o sorteio automático de missões fica desligado durante o teste
 local autoStartOriginal = Config.Director.AutoStart
@@ -253,4 +260,5 @@ check("Marcadores de missão limpos", #CollectionService:GetTagged("PostoMarker"
 print("[TESTE POSTO] ===== avisos/erros no Output =====")
 for _, l in ipairs(logs) do print("[TESTE POSTO] Output: " .. l) end
 Config.Director.AutoStart = autoStartOriginal
+workspace:SetAttribute("TesteAutomaticoEmExecucao", nil)
 print(string.format("[TESTE POSTO] ===== RESULTADO: %d passaram, %d falharam, %d avisos/erros =====", passed, failed, #logs))

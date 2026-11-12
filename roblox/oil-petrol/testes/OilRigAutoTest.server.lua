@@ -58,6 +58,13 @@ local Heli = require(M.Systems.Helicopter)
 local Alarm = require(M.Systems.Alarm)
 local Cargo = require(M.Systems.Cargo)
 
+-- fila: os roteiros movem o jogador e iniciam missões; dois ao mesmo tempo atrapalham um ao outro
+while workspace:GetAttribute("TesteAutomaticoEmExecucao") do
+	print("[TESTE OIL] aguardando outro roteiro terminar: " .. tostring(workspace:GetAttribute("TesteAutomaticoEmExecucao")))
+	task.wait(3)
+end
+workspace:SetAttribute("TesteAutomaticoEmExecucao", "OIL")
+char = player.Character or player.CharacterAdded:Wait()
 print("[TESTE OIL] ===== início =====")
 -- o sorteio automático de missões fica desligado durante o teste (senão ele inicia missões nas esperas longas)
 local autoStartOriginal = Config.Director.AutoStart
@@ -219,4 +226,5 @@ check("Energia restaurada após blackout cancelado", waitUntil(function() return
 print("[TESTE OIL] ===== avisos/erros no Output =====")
 for _, l in ipairs(logs) do print("[TESTE OIL] Output: " .. l) end
 Config.Director.AutoStart = autoStartOriginal
+workspace:SetAttribute("TesteAutomaticoEmExecucao", nil)
 print(string.format("[TESTE OIL] ===== RESULTADO: %d passaram, %d falharam, %d avisos/erros =====", passed, failed, #logs))

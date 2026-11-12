@@ -16,9 +16,21 @@ local RS = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local LogService = game:GetService("LogService")
 
-local area = workspace:WaitForChild("DepartamentoPolicia")
-local delegacia = area:WaitForChild("Delegacia")
-local objects = area:WaitForChild("DelegaciaObjects")
+-- procura a pasta Delegacia (com o script Core) em qualquer lugar do Workspace:
+-- o modelo pode ter sido movido ou ficar dentro de outro Model/pasta
+local delegacia
+for _ = 1, 40 do
+	for _, d in ipairs(workspace:GetDescendants()) do
+		if d.Name == "Delegacia" and d:IsA("Folder") and d:FindFirstChild("Core") then delegacia = d break end
+	end
+	if delegacia then break end
+	task.wait(0.5)
+end
+assert(delegacia, "[TESTE] pasta Delegacia (com Core) não encontrada no Workspace")
+local area = delegacia.Parent
+local objects = area:WaitForChild("DelegaciaObjects", 20)
+assert(objects, "[TESTE] DelegaciaObjects não encontrado ao lado da pasta Delegacia (" .. area:GetFullName() .. ")")
+print("[TESTE] delegacia encontrada em " .. delegacia:GetFullName())
 local sys = delegacia:WaitForChild("Modules"):WaitForChild("Systems")
 
 -- coleta avisos/erros do Output durante a execução
@@ -62,6 +74,13 @@ local Duty = require(sys.Duty)
 local Npc = require(sys.Npc)
 local runtime = workspace:WaitForChild("DelegaciaRuntime")
 
+-- fila: os roteiros movem o jogador e iniciam missões; dois ao mesmo tempo atrapalham um ao outro
+while workspace:GetAttribute("TesteAutomaticoEmExecucao") do
+	print("[TESTE] aguardando outro roteiro terminar: " .. tostring(workspace:GetAttribute("TesteAutomaticoEmExecucao")))
+	task.wait(3)
+end
+workspace:SetAttribute("TesteAutomaticoEmExecucao", "DELEGACIA")
+char = player.Character or player.CharacterAdded:Wait()
 print("[TESTE] ===== início =====")
 -- o sorteio automático de ocorrências fica desligado durante o teste
 local Config = require(delegacia.Modules.Config)
@@ -251,4 +270,5 @@ end
 print("[TESTE] ===== avisos/erros capturados no Output =====")
 for _, l in ipairs(logs) do print("[TESTE] Output: " .. l) end
 Config.Director.AutoStart = autoStartOriginal
+workspace:SetAttribute("TesteAutomaticoEmExecucao", nil)
 print(string.format("[TESTE] ===== RESULTADO: %d passaram, %d falharam, %d avisos/erros no Output =====", passed, failed, #logs))

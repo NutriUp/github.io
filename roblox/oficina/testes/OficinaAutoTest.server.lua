@@ -54,6 +54,13 @@ local Desempenho = require(M.Desempenho)
 local Sessoes = require(M.Sessoes)
 local Portoes = require(M.Portoes)
 
+-- fila: os roteiros movem o jogador e iniciam missões; dois ao mesmo tempo atrapalham um ao outro
+while workspace:GetAttribute("TesteAutomaticoEmExecucao") do
+	print("[TESTE OFICINA] aguardando outro roteiro terminar: " .. tostring(workspace:GetAttribute("TesteAutomaticoEmExecucao")))
+	task.wait(3)
+end
+workspace:SetAttribute("TesteAutomaticoEmExecucao", "OFICINA")
+char = player.Character or player.CharacterAdded:Wait()
 print("[TESTE OFICINA] ===== início =====")
 -- 1. inicialização
 local remotes = RS:FindFirstChild("OficinaRemotes")
@@ -188,4 +195,5 @@ if criouVal then din:Destroy() end
 if criouLs then ls:Destroy() end
 print("[TESTE OFICINA] ===== avisos/erros no Output =====")
 for _, l in ipairs(logs) do print("[TESTE OFICINA] Output: " .. l) end
+workspace:SetAttribute("TesteAutomaticoEmExecucao", nil)
 print(string.format("[TESTE OFICINA] ===== RESULTADO: %d passaram, %d falharam, %d avisos/erros =====", passou, falhou, #logs))
