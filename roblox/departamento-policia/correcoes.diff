@@ -1,0 +1,133 @@
+diff -u src/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__bomb_threat.lua src2/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__bomb_threat.lua
+--- Workspace__DepartamentoPolicia__Delegacia__MissionDefs__bomb_threat.lua	2026-11-12 11:13:41.425487072 +0000
++++ Workspace__DepartamentoPolicia__Delegacia__MissionDefs__bomb_threat.lua	2026-11-12 11:19:25.181374425 +0000
+@@ -8,9 +8,13 @@
+ 	ex.BlastRadius = ctx.Config.Missions.Bomb.Blast
+ 	ex.BlastPressure = 0
+ 	ex.DestroyJointRadiusPercent = 0
++	local hurt = {} -- Explosion.Hit dispara uma vez por peça: cada Humanoid só recebe o dano uma vez
+ 	ex.Hit:Connect(function(part)
+ 		local hum = part.Parent and part.Parent:FindFirstChildOfClass("Humanoid")
+-		if hum and not m.Hurt then hum:TakeDamage(40) end
++		if hum and not m.Hurt and not hurt[hum] then
++			hurt[hum] = true
++			hum:TakeDamage(40)
++		end
+ 	end)
+ 	ex.Parent = workspace
+ 	ctx.Util.PlaySound(workspace, ctx.Config.Sounds.Explosion, { Volume = 1, Range = 400 })
+diff -u src/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__hostage.lua src2/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__hostage.lua
+--- Workspace__DepartamentoPolicia__Delegacia__MissionDefs__hostage.lua	2026-11-12 11:13:41.425588613 +0000
++++ Workspace__DepartamentoPolicia__Delegacia__MissionDefs__hostage.lua	2026-11-12 11:19:25.181539075 +0000
+@@ -145,7 +145,7 @@
+ 		for _, h in ipairs(m.Hostages or {}) do ctx.Systems.Npc.Remove(h) end
+ 		if m.Rec then
+ 			ctx.Util.Unmark(m.Rec.Root)
+-			if m.Rec.State ~= "jailed" then ctx.Systems.Suspects.Remove(m.Rec) end
++			if m.Rec.State ~= "jailed" and not table.find(ctx.Systems.Custody.Prisoners(), m.Rec) then ctx.Systems.Suspects.Remove(m.Rec) end
+ 		end
+ 	end,
+ }
+diff -u src/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__interrogation.lua src2/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__interrogation.lua
+--- Workspace__DepartamentoPolicia__Delegacia__MissionDefs__interrogation.lua	2026-11-12 11:13:41.425634279 +0000
++++ Workspace__DepartamentoPolicia__Delegacia__MissionDefs__interrogation.lua	2026-11-12 11:19:25.181576998 +0000
+@@ -94,6 +94,6 @@
+ 	Cleanup = function(ctx, m)
+ 		if m.Prompt then m.Prompt:Destroy() end
+ 		ctx.Util.Unmark(ctx.Util.Obj("BookingDesk"))
+-		if m.Rec and m.Rec.State ~= "jailed" then ctx.Systems.Suspects.Remove(m.Rec) end
++		if m.Rec and m.Rec.State ~= "jailed" and not table.find(ctx.Systems.Custody.Prisoners(), m.Rec) then ctx.Systems.Suspects.Remove(m.Rec) end
+ 	end,
+ }
+diff -u src/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__most_wanted.lua src2/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__most_wanted.lua
+--- Workspace__DepartamentoPolicia__Delegacia__MissionDefs__most_wanted.lua	2026-11-12 11:13:41.425658424 +0000
++++ Workspace__DepartamentoPolicia__Delegacia__MissionDefs__most_wanted.lua	2026-11-12 11:19:25.181602827 +0000
+@@ -69,7 +69,7 @@
+ 		ctx.Util.Unmark(ctx.Util.Obj("BookingDesk"))
+ 		if m.Rec then
+ 			ctx.Systems.CCTV.Untrack(m.Rec.Root)
+-			if m.Rec.State ~= "jailed" then ctx.Systems.Suspects.Remove(m.Rec) end
++			if m.Rec.State ~= "jailed" and not table.find(ctx.Systems.Custody.Prisoners(), m.Rec) then ctx.Systems.Suspects.Remove(m.Rec) end
+ 		end
+ 		if m.Entry and not m.Captured then
+ 			m.Entry.Active = false
+diff -u src/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__perimeter_breach.lua src2/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__perimeter_breach.lua
+--- Workspace__DepartamentoPolicia__Delegacia__MissionDefs__perimeter_breach.lua	2026-11-12 11:13:41.425700671 +0000
++++ Workspace__DepartamentoPolicia__Delegacia__MissionDefs__perimeter_breach.lua	2026-11-12 11:19:25.181649081 +0000
+@@ -65,7 +65,7 @@
+ 		if m.Rec then
+ 			ctx.Systems.CCTV.Untrack(m.Rec.Root)
+ 			ctx.Util.Unmark(m.Rec.Root)
+-			if m.Rec.State ~= "jailed" then ctx.Systems.Suspects.Remove(m.Rec) end
++			if m.Rec.State ~= "jailed" and not table.find(ctx.Systems.Custody.Prisoners(), m.Rec) then ctx.Systems.Suspects.Remove(m.Rec) end
+ 		end
+ 	end,
+ }
+diff -u src/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__prison_break.lua src2/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__prison_break.lua
+--- Workspace__DepartamentoPolicia__Delegacia__MissionDefs__prison_break.lua	2026-11-12 11:13:41.425721734 +0000
++++ Workspace__DepartamentoPolicia__Delegacia__MissionDefs__prison_break.lua	2026-11-12 11:19:25.181673181 +0000
+@@ -62,7 +62,7 @@
+ 			local cell = ctx.Systems.Custody.Cell(rec.Cell or 1)
+ 			if cell then ctx.Util.Unmark(cell.Marker) end
+ 			ctx.Util.Unmark(rec.Root)
+-			if rec.State ~= "jailed" then
++			if rec.State ~= "jailed" and not table.find(ctx.Systems.Custody.Prisoners(), rec) then
+ 				-- fugiu de verdade: some e entra um novo preso de ambiente depois
+ 				ctx.Systems.Suspects.Remove(rec)
+ 				task.delay(25, function() ctx.Systems.Custody.AddPrisoner(ctx.Util.RandomName(), nil, { ambient = true }) end)
+diff -u src/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__riot.lua src2/Workspace__DepartamentoPolicia__Delegacia__MissionDefs__riot.lua
+--- Workspace__DepartamentoPolicia__Delegacia__MissionDefs__riot.lua	2026-11-12 11:13:41.425769412 +0000
++++ Workspace__DepartamentoPolicia__Delegacia__MissionDefs__riot.lua	2026-11-12 11:19:25.181723078 +0000
+@@ -61,7 +61,7 @@
+ 		for _, p in ipairs(m.Prompts or {}) do p:Destroy() end
+ 		for _, r in ipairs(m.Rioters or {}) do
+ 			ctx.Util.Unmark(r.Root)
+-			if r.Alive and r.State ~= "jailed" then
++			if r.State ~= "jailed" and not table.find(ctx.Systems.Custody.Prisoners(), r) then
+ 				ctx.Systems.Suspects.Remove(r)
+ 			end
+ 		end
+diff -u src/Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Custody.lua src2/Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Custody.lua
+--- Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Custody.lua	2026-11-12 11:13:41.424335628 +0000
++++ Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Custody.lua	2026-11-12 11:19:25.180041558 +0000
+@@ -173,8 +173,10 @@
+ 	ctx.Systems.Rank.AddXP(player, 14, "ficha")
+ 	ctx.Systems.Radio.Popup(player, "FICHADO +" .. ctx.Util.Money(fee), "success")
+ 	ctx.Systems.Radio.Say("DESPACHO", "Identificação concluída: " .. target.Name .. (target.Crime and (" — " .. target.Crime) or "") .. ".")
+-	ctx.Bus.Fire("SuspectBooked", target, player)
++	-- encaminha à cela ANTES de avisar as missões: o Cleanup disparado por SuspectBooked já encontra o preso
++	-- em Custody.Prisoners() e não o destrói antes de chegar à cela
+ 	if not target.NoJail then Custody.Jail(target) end
++	ctx.Bus.Fire("SuspectBooked", target, player)
+ 	return true
+ end
+ 
+@@ -267,6 +269,7 @@
+ 				local rec = prisoners[i]
+ 				if not rec.Alive or not rec.Root.Parent then
+ 					table.remove(prisoners, i)
++					ctx.Systems.Suspects.Remove(rec) -- não deixa o corpo/modelo órfão em DelegaciaRuntime
+ 				elseif not rec.Ambient and rec.State == "jailed" then
+ 					rec.JailedAt = rec.JailedAt or os.clock()
+ 					if os.clock() - rec.JailedAt > ctx.Config.Custody.HoldSeconds then
+diff -u src/_index.tsv src2/_index.tsv
+--- _index.tsv	2026-11-12 11:13:41.426049011 +0000
++++ _index.tsv	2026-11-12 11:19:25.182024192 +0000
+@@ -127,7 +127,7 @@
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/Modules/Systems/Alarm	99	disabled=	RBX2E953AF1047B4091AB46B090667B9801	Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Alarm.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/Modules/Systems/Armory	61	disabled=	RBXBAA22C3A75804627A3EED623AB58384D	Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Armory.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/Modules/Systems/CCTV	108	disabled=	RBX8600D456885E40B0977573952B5266E1	Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__CCTV.lua
+-ModuleScript	Workspace/DepartamentoPolicia/Delegacia/Modules/Systems/Custody	282	disabled=	RBX10DAE31C28FE486999B89553FEEB4833	Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Custody.lua
++ModuleScript	Workspace/DepartamentoPolicia/Delegacia/Modules/Systems/Custody	285	disabled=	RBX10DAE31C28FE486999B89553FEEB4833	Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Custody.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/Modules/Systems/Dialog	58	disabled=	RBX2BBB188126804BDABA325F145F9781A6	Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Dialog.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/Modules/Systems/Dispatch	153	disabled=	RBX721664E6AD3F4950A62B4A259E2980E1	Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Dispatch.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/Modules/Systems/Doors	86	disabled=	RBXBF81855CFEC842F6914DC120B2FA4FDA	Workspace__DepartamentoPolicia__Delegacia__Modules__Systems__Doors.lua
+@@ -149,7 +149,7 @@
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/MissionDefs/_Common	38	disabled=	RBX8A622861085446B1B5114D0BDD428E4F	Workspace__DepartamentoPolicia__Delegacia__MissionDefs___Common.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/MissionDefs/_Template	24	disabled=	RBX087265C8D0534451A0B041C7B1C40DF0	Workspace__DepartamentoPolicia__Delegacia__MissionDefs___Template.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/MissionDefs/blackout	65	disabled=	RBX51A19E37D675449386D04B6DC7CCB5B8	Workspace__DepartamentoPolicia__Delegacia__MissionDefs__blackout.lua
+-ModuleScript	Workspace/DepartamentoPolicia/Delegacia/MissionDefs/bomb_threat	112	disabled=	RBX46DDEEA867FC497BBFB886466C29A16D	Workspace__DepartamentoPolicia__Delegacia__MissionDefs__bomb_threat.lua
++ModuleScript	Workspace/DepartamentoPolicia/Delegacia/MissionDefs/bomb_threat	116	disabled=	RBX46DDEEA867FC497BBFB886466C29A16D	Workspace__DepartamentoPolicia__Delegacia__MissionDefs__bomb_threat.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/MissionDefs/crime_scene	82	disabled=	RBXFB88759BE1354207AAD0FE0263281B03	Workspace__DepartamentoPolicia__Delegacia__MissionDefs__crime_scene.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/MissionDefs/hack_intrusion	64	disabled=	RBXFF4BABD9A5F64F0EA3D9D235DDCED65F	Workspace__DepartamentoPolicia__Delegacia__MissionDefs__hack_intrusion.lua
+ ModuleScript	Workspace/DepartamentoPolicia/Delegacia/MissionDefs/hostage	151	disabled=	RBX1ECCA6CBF5924A589E9FC03F266C3CF9	Workspace__DepartamentoPolicia__Delegacia__MissionDefs__hostage.lua
