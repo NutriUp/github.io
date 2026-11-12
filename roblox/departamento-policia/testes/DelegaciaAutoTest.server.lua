@@ -131,6 +131,17 @@ local function custodyFlow(id)
 	if not rec then check("Custódia/" .. id .. ": suspeito criado", false) return end
 	local desk = objects:FindFirstChild("BookingDesk")
 	local top = desk.Position + Vector3.new(0, desk.Size.Y / 2 + 3, 0)
+	-- o jogador precisa estar a pé: sentado num veículo, o teletransporte não o tira do carro e a escolta
+	-- solta o preso por distância. Também impede sentar sozinho ao encostar num assento durante o teste.
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+		if hum.SeatPart then
+			hum.Sit = false
+			hum:ChangeState(Enum.HumanoidStateType.Jumping)
+			waitUntil(function() return hum.SeatPart == nil end, 3)
+		end
+	end
 	char:PivotTo(CFrame.new(top + Vector3.new(2, 0, 0)))
 	rec.Model:PivotTo(CFrame.new(top + Vector3.new(-2, 0, 0)))
 	task.wait(0.3)
@@ -138,7 +149,9 @@ local function custodyFlow(id)
 	task.wait(0.3)
 	Suspects.Escort(rec, player, true)
 	task.wait(0.3)
-	check("Custódia/" .. id .. ": suspeito em escolta", rec.State == "escorted", rec.State)
+	local root = char:FindFirstChild("HumanoidRootPart")
+	check("Custódia/" .. id .. ": suspeito em escolta", rec.State == "escorted", rec.State
+		.. string.format(" | dist. jogador-suspeito=%.1f | sentado=%s", root and (root.Position - rec.Root.Position).Magnitude or -1, tostring(hum and hum.SeatPart ~= nil)))
 	local booked = Custody.Book(player)
 	check("Custódia/" .. id .. ": ficha aceita no balcão", booked)
 	task.wait(1)
@@ -270,5 +283,9 @@ end
 print("[TESTE] ===== avisos/erros capturados no Output =====")
 for _, l in ipairs(logs) do print("[TESTE] Output: " .. l) end
 Config.Director.AutoStart = autoStartOriginal
+do
+	local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if h then h:SetStateEnabled(Enum.HumanoidStateType.Seated, true) end
+end
 workspace:SetAttribute("TesteAutomaticoEmExecucao", nil)
 print(string.format("[TESTE] ===== RESULTADO: %d passaram, %d falharam, %d avisos/erros no Output =====", passed, failed, #logs))
