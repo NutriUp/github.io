@@ -57,6 +57,9 @@ local Customers = require(S.Customers)
 local runtime = workspace:WaitForChild("PostoRuntime")
 
 print("[TESTE POSTO] ===== início =====")
+-- o sorteio automático de missões fica desligado durante o teste
+local autoStartOriginal = Config.Director.AutoStart
+Config.Director.AutoStart = false
 local function stopActive()
 	local a = Missions.Active()
 	if a then a:Fail("teste-automatico") task.wait(1) end
@@ -93,7 +96,7 @@ end
 
 -- 3. áudio ausente não quebra
 check("PlaySound com ID vazio devolve nil", Util.PlaySound(workspace, "") == nil)
-check("PlaySound com ID numérico/sem parent não lança erro", pcall(Util.PlaySound, workspace, 0) and pcall(Util.PlaySound, nil, "rbxassetid://1"))
+check("PlaySound com ID numérico/sem parent não lança erro", pcall(Util.PlaySound, nil, 123) and pcall(Util.PlaySound, nil, "rbxassetid://1"))
 
 -- 4. apagão: relâmpago + blackout (regressão do defeito que ignorava o apagão)
 do
@@ -249,4 +252,5 @@ check("Marcadores de missão limpos", #CollectionService:GetTagged("PostoMarker"
 
 print("[TESTE POSTO] ===== avisos/erros no Output =====")
 for _, l in ipairs(logs) do print("[TESTE POSTO] Output: " .. l) end
+Config.Director.AutoStart = autoStartOriginal
 print(string.format("[TESTE POSTO] ===== RESULTADO: %d passaram, %d falharam, %d avisos/erros =====", passed, failed, #logs))

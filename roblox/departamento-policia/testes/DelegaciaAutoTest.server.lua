@@ -63,6 +63,10 @@ local Npc = require(sys.Npc)
 local runtime = workspace:WaitForChild("DelegaciaRuntime")
 
 print("[TESTE] ===== início =====")
+-- o sorteio automático de ocorrências fica desligado durante o teste
+local Config = require(delegacia.Modules.Config)
+local autoStartOriginal = Config.Director.AutoStart
+Config.Director.AutoStart = false
 Duty.Set(player, true)
 task.wait(0.5)
 
@@ -246,4 +250,5 @@ end
 -- ===== resumo =====
 print("[TESTE] ===== avisos/erros capturados no Output =====")
 for _, l in ipairs(logs) do print("[TESTE] Output: " .. l) end
+Config.Director.AutoStart = autoStartOriginal
 print(string.format("[TESTE] ===== RESULTADO: %d passaram, %d falharam, %d avisos/erros no Output =====", passed, failed, #logs))

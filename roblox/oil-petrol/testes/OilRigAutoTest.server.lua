@@ -59,6 +59,9 @@ local Alarm = require(M.Systems.Alarm)
 local Cargo = require(M.Systems.Cargo)
 
 print("[TESTE OIL] ===== início =====")
+-- o sorteio automático de missões fica desligado durante o teste (senão ele inicia missões nas esperas longas)
+local autoStartOriginal = Config.Director.AutoStart
+Config.Director.AutoStart = false
 local function stopActive()
 	local a = Missions.Active()
 	if a then a:Fail("teste-automatico") task.wait(0.5) end
@@ -112,7 +115,8 @@ end
 -- 4. áudio ausente/inválido não quebra nada
 do
 	check("PlaySound com ID vazio devolve nil", Util.PlaySound(workspace, "") == nil)
-	check("PlaySound com ID numérico não lança erro", pcall(Util.PlaySound, workspace, 0))
+	-- ID numérico sem parent: exercita a conversão sem baixar asset (evita erro de ContentId no Output)
+	check("PlaySound com ID numérico não lança erro", pcall(Util.PlaySound, nil, 123))
 	check("PlaySound sem parent não lança erro", pcall(Util.PlaySound, nil, "rbxassetid://1"))
 end
 
@@ -195,8 +199,10 @@ end
 
 -- 9. todas as missões iniciam e encerram sem travar
 for _, id in ipairs({ "pressure", "blackout", "fires", "barrels", "airdrop", "inspection", "crane" }) do
-	stopActive()
 	waitUntil(function() return not Heli.Active() end, 70)
+	-- o blackout cancelado só devolve a energia 8 s depois (comportamento original)
+	waitUntil(function() return state:GetAttribute("Power") == true end, 12)
+	stopActive()
 	local ok = Missions.Start(id)
 	check("Smoke " .. id .. ": inicia", ok)
 	if ok then
@@ -212,4 +218,5 @@ check("Energia restaurada após blackout cancelado", waitUntil(function() return
 
 print("[TESTE OIL] ===== avisos/erros no Output =====")
 for _, l in ipairs(logs) do print("[TESTE OIL] Output: " .. l) end
+Config.Director.AutoStart = autoStartOriginal
 print(string.format("[TESTE OIL] ===== RESULTADO: %d passaram, %d falharam, %d avisos/erros =====", passed, failed, #logs))
