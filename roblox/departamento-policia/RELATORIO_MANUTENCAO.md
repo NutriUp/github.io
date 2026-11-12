@@ -78,3 +78,8 @@ Faça com 1 jogador no Play (F5) e com 2 jogadores em "Start Server + 2 Players"
 - **Suspeito fichado em missão encerrada**: agora ele continua existindo até ser preso e é liberado depois de `HoldSeconds` (240 s), como qualquer preso fichado por um jogador. É o comportamento pretendido.
 - **Lotação**: se as 4 celas estiverem cheias (3 por cela), `Custody.Jail` falha e o suspeito é removido pelo `Cleanup`, exatamente como antes.
 - **Observações fora do escopo (não alteradas)**: `bomb_threat.OnFail` também explode quando a missão é cancelada (`ForceMission`) ou dá erro interno. Em `prisoner_transfer`, fichar o detento no balcão trava a missão até o tempo acabar.
+
+## 8. Correção posterior ao playtest (Studio do dono)
+| Arquivo | Defeito confirmado em execução | Correção |
+|---|---|---|
+| `Modules/Systems/Suspects` → `pose` | No Studio, `C0` dos ombros do rig gerado pela engine é somente leitura: `Unable to assign property C0. Property is read only` em `Cuff` e em `Surrender`. O erro acontecia **antes** de mudar o estado: **algemar e render falhavam** (inclusive a rendição feita pelos oficiais NPC). | Procura só juntas `Motor6D` e aplica a pose dentro de `pcall`. Se o rig recusar, marca `rec.NoPose` e segue: a pose é apenas visual e nunca mais bloqueia a ação. Arquivo avulso: `Suspects.lua`. |

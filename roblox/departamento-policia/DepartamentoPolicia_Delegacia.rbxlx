@@ -695078,26 +695078,38 @@ local DOWN = { surrender = true, cuffed = true, escorted = true, booked = true, 
 local function cfg() return ctx.Config.Suspects end
 
 -- ===== poses (mexe nos ombros; C0 replica para todos) =====
+-- Só juntas Motor6D. A pose é apenas visual: se o rig não permitir alterar C0 (em alguns rigs gerados pela
+-- engine a propriedade é somente leitura), a pose é ignorada e a ação (render, algemar) continua normalmente.
 local function shoulders(model)
-	local r = model:FindFirstChild("RightShoulder", true)
-	local l = model:FindFirstChild("LeftShoulder", true)
-	return r, l
+	local function find(...)
+		for _, nome in ipairs({ ... }) do
+			for _, d in ipairs(model:GetDescendants()) do
+				if d.Name == nome and d:IsA("Motor6D") then return d end
+			end
+		end
+		return nil
+	end
+	return find("RightShoulder", "Right Shoulder"), find("LeftShoulder", "Left Shoulder")
 end
 
 local function pose(rec, kind)
+	if rec.NoPose then return end
 	local r, l = shoulders(rec.Model)
-	if not r or not l then return end
-	if not rec.C0 then rec.C0 = { r = r.C0, l = l.C0 } end
-	if kind == "handsup" then
-		r.C0 = rec.C0.r * CFrame.Angles(0, 0, math.rad(165))
-		l.C0 = rec.C0.l * CFrame.Angles(0, 0, -math.rad(165))
-	elseif kind == "cuffed" then
-		r.C0 = rec.C0.r * CFrame.Angles(math.rad(25), 0, math.rad(8))
-		l.C0 = rec.C0.l * CFrame.Angles(math.rad(25), 0, -math.rad(8))
-	else
-		r.C0 = rec.C0.r
-		l.C0 = rec.C0.l
-	end
+	if not r or not l then rec.NoPose = true return end
+	local ok = pcall(function()
+		if not rec.C0 then rec.C0 = { r = r.C0, l = l.C0 } end
+		if kind == "handsup" then
+			r.C0 = rec.C0.r * CFrame.Angles(0, 0, math.rad(165))
+			l.C0 = rec.C0.l * CFrame.Angles(0, 0, -math.rad(165))
+		elseif kind == "cuffed" then
+			r.C0 = rec.C0.r * CFrame.Angles(math.rad(25), 0, math.rad(8))
+			l.C0 = rec.C0.l * CFrame.Angles(math.rad(25), 0, -math.rad(8))
+		else
+			r.C0 = rec.C0.r
+			l.C0 = rec.C0.l
+		end
+	end)
+	if not ok then rec.NoPose = true end
 end
 
 -- ===== etiqueta de estado =====
