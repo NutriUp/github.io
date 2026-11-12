@@ -81,12 +81,25 @@ din.Value = 5000
 -- 3. portões abrem com o jogador perto
 local box = Sessoes.Boxes()[1]
 local z = box.zona.Position
-char:PivotTo(CFrame.new(z + Vector3.new(-20, 3, 0)))
-local portao
+-- portão mais próximo do box 1 (não depende da orientação da oficina no mapa)
+local portao, dp
 for _, d in ipairs(modelo:GetDescendants()) do
-	if d:IsA("MeshPart") and d.Name == "Racing_Garage_Rollup_a" and math.abs(d.Position.Z - z.Z) < 6 then portao = d end
+	if d:IsA("MeshPart") and d.Name == "Racing_Garage_Rollup_a" then
+		local dist = (d.Position - z).Magnitude
+		if not dp or dist < dp then portao, dp = d, dist end
+	end
 end
-check("Portão do box 1 abre com jogador próximo", portao ~= nil and esperar(function() return portao.CanCollide == false and portao.Size.Y < 3 end, 6))
+if portao then
+	-- jogador 8 studs para dentro do portão, no caminho do box
+	local dir = (z - portao.Position) * Vector3.new(1, 0, 1)
+	dir = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(1, 0, 0)
+	char:PivotTo(CFrame.new(Vector3.new(portao.Position.X, z.Y - 3, portao.Position.Z) + dir * 8))
+end
+local abriu = portao ~= nil and esperar(function() return portao.CanCollide == false and portao.Size.Y < 3 end, 6)
+local r = char:FindFirstChild("HumanoidRootPart")
+check("Portão do box 1 abre com jogador próximo", abriu, portao and string.format("dist. jogador=%.1f, CanCollide=%s, altura=%.1f",
+	r and (r.Position - portao.Position).Magnitude or -1, tostring(portao.CanCollide), portao.Size.Y) or "portão não encontrado")
+char:PivotTo(CFrame.new(z + Vector3.new(0, 3, 0)))
 
 -- 4. carro de teste (VehicleSeat clássico) no box
 local car = Instance.new("Model")
