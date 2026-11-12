@@ -1,0 +1,707 @@
+diff -u src/Oil_petrol__OilRig__Core.lua src2/Oil_petrol__OilRig__Core.lua
+--- Oil_petrol__OilRig__Core.lua	2026-11-12 11:54:52.865681141 +0000
++++ Oil_petrol__OilRig__Core.lua	2026-11-12 12:01:50.283706289 +0000
+@@ -29,20 +29,59 @@
+ 	return r
+ end
+ 
+-local cf, size = model:GetBoundingBox()
++-- Caixa envolvente só da estrutura física: ignora a pasta OilRig (os Handles das Tools-modelo
++-- ficam em 0,0,0 e deslocavam o centro e o raio da plataforma em centenas de studs).
++local function rigBounds()
++	local minV, maxV
++	for _, d in ipairs(model:GetDescendants()) do
++		if d:IsA("BasePart") and not d:IsDescendantOf(rig) then
++			local half = d.Size / 2
++			local p = d.Position
++			local lo, hi = p - half, p + half
++			minV = minV and minV:Min(lo) or lo
++			maxV = maxV and maxV:Max(hi) or hi
++		end
++	end
++	if not minV then
++		local cf, size = model:GetBoundingBox()
++		return cf.Position, size
++	end
++	return (minV + maxV) / 2, maxV - minV
++end
++local center, size = rigBounds()
++
+ local ctx = {
+ 	Rig = rig, Model = model, Objects = objects,
+ 	Config = Config, Bus = Bus, State = State, Util = Util,
+ 	Remotes = { Notify = remote("Notify"), Radio = remote("Radio"), Shake = remote("Shake") },
+-	Systems = {}, Center = cf.Position,
++	Systems = {}, Center = center,
+ }
++Util.Init(ctx)
+ 
+-State.Set("RigCenter", cf.Position)
++State.Set("RigCenter", center)
+ State.Set("RigRadius", math.max(size.X, size.Z) / 2 + Config.Hud.ExtraRadius)
+ State.Set("Power", true)
+ State.Set("Alarm", false)
+ State.Set("Pressure", Config.Pressure.Start)
+ 
++-- Validação em runtime: avisa no Output o que faltar (os sistemas e missões dependentes ficam indisponíveis)
++do
++	local missing = {}
++	for _, n in ipairs({ "GaugePanel", "MissionBoard", "BreakerPanel", "Generator", "Locker", "CraneConsole",
++		"DockPad", "HelipadPad", "HeliConsole", "FlareTip" }) do
++		if not objects:FindFirstChild(n) then table.insert(missing, "RigObjects." .. n) end
++	end
++	for _, pat in ipairs({ "^Valve_%d+$", "^FireSpot_%d+$", "^BarrelSpawn_%d+$", "^CrateSpawn_%d+$", "^Checkpoint_%d+$", "^Beacon_%d+$" }) do
++		if Util.CountObjects(pat) == 0 then table.insert(missing, "RigObjects." .. pat) end
++	end
++	local tools = rig:FindFirstChild("Tools")
++	for _, n in ipairs({ "Extintor", "Barril", "Caixa de Suprimentos" }) do
++		if not (tools and tools:FindFirstChild(n)) then table.insert(missing, "OilRig.Tools." .. n) end
++	end
++	if not rig:FindFirstChild("Client") or not rig.Client:FindFirstChild("RigHUD") then table.insert(missing, "OilRig.Client.RigHUD") end
++	if #missing > 0 then warn("[OilRig] objetos ausentes: " .. table.concat(missing, ", ")) end
++end
++
+ -- Sistemas (ordem importa para Init)
+ local order = { "Radio", "Alarm", "Pressure", "Power", "Fire", "Cargo", "Crane", "Helicopter", "Inspection" }
+ local folder = modules.Systems
+@@ -51,6 +90,8 @@
+ 	if ms then
+ 		local ok, mod = pcall(require, ms)
+ 		if ok then ctx.Systems[name] = mod else warn("[OilRig] falha ao carregar " .. name .. ": " .. tostring(mod)) end
++	else
++		warn("[OilRig] módulo ausente: " .. name)
+ 	end
+ end
+ for _, name in ipairs(order) do
+@@ -63,12 +104,14 @@
+ 
+ local Missions = require(modules.Missions)
+ ctx.Missions = Missions
+-Missions.Init(ctx)
++local okm, errm = pcall(Missions.Init, ctx)
++if not okm then warn("[OilRig] erro em Missions.Init: " .. tostring(errm)) end
+ 
+ -- HUD do cliente
+-local template = rig.Client:FindFirstChild("RigHUD")
++local template = rig:FindFirstChild("Client") and rig.Client:FindFirstChild("RigHUD")
+ local function install(player)
+ 	task.spawn(function()
++		if not template then return end
+ 		local pg = player:WaitForChild("PlayerGui", 30)
+ 		if not pg or pg:FindFirstChild("OilRigHUD") then return end
+ 		local gui = Instance.new("ScreenGui")
+diff -u src/Oil_petrol__OilRig__MissionDefs__airdrop.lua src2/Oil_petrol__OilRig__MissionDefs__airdrop.lua
+--- Oil_petrol__OilRig__MissionDefs__airdrop.lua	2026-11-12 11:54:52.866882855 +0000
++++ Oil_petrol__OilRig__MissionDefs__airdrop.lua	2026-11-12 12:01:50.284418596 +0000
+@@ -2,10 +2,14 @@
+ return {
+ 	Id = "airdrop", Title = "Suprimentos Aéreos", Weight = 2, Duration = 280, Reward = 260,
+ 	Description = "Um helicóptero está chegando ao heliponto. Pegue as caixas de suprimento e entregue na doca.",
+-	CanStart = function(ctx) return not ctx.Systems.Helicopter.Active() end,
++	CanStart = function(ctx)
++		return not ctx.Systems.Helicopter.Active() and ctx.Objects:FindFirstChild("HelipadPad") ~= nil
++			and ctx.Objects:FindFirstChild("DockPad") ~= nil and ctx.Util.CountObjects("^CrateSpawn_") > 0
++	end,
+ 	Start = function(ctx, m)
+-		m:SetGoal(ctx.Config.Heli.CrateCount)
+-		ctx.Systems.Helicopter.Call()
++		-- a meta acompanha as caixas que de fato podem nascer
++		m:SetGoal(math.min(ctx.Config.Heli.CrateCount, ctx.Util.CountObjects("^CrateSpawn_")))
++		if not ctx.Systems.Helicopter.Call() then error("helicóptero indisponível") end
+ 		m:Connect(ctx.Bus.On("CargoDelivered", function(plr, kind)
+ 			if kind == "Suprimento" then m:Contribute(plr) m:Add(1) end
+ 		end))
+diff -u src/Oil_petrol__OilRig__MissionDefs__barrels.lua src2/Oil_petrol__OilRig__MissionDefs__barrels.lua
+--- Oil_petrol__OilRig__MissionDefs__barrels.lua	2026-11-12 11:54:52.866866946 +0000
++++ Oil_petrol__OilRig__MissionDefs__barrels.lua	2026-11-12 12:01:50.284399084 +0000
+@@ -2,9 +2,12 @@
+ return {
+ 	Id = "barrels", Title = "Carga de Barris", Weight = 3, Duration = 240, Reward = 220,
+ 	Description = "Leve 5 barris de petróleo até a doca de carregamento antes que o navio-tanque parta.",
++	CanStart = function(ctx)
++		return ctx.Systems.Cargo ~= nil and ctx.Objects:FindFirstChild("DockPad") ~= nil and ctx.Util.CountObjects("^BarrelSpawn_") > 0
++	end,
+ 	Start = function(ctx, m)
+ 		local n = ctx.Systems.Cargo.SpawnBarrels(5)
+-		if n == 0 then m:Complete() return end
++		if n == 0 then error("nenhum ponto de barril disponível") end -- antes: concluía sem objetivo
+ 		m:SetGoal(n)
+ 		ctx.Systems.Radio.Say("CONTROLE", "O navio-tanque está esperando. Barris no pátio, levem todos até a doca.")
+ 		m:Connect(ctx.Bus.On("CargoDelivered", function(plr, kind)
+diff -u src/Oil_petrol__OilRig__MissionDefs__blackout.lua src2/Oil_petrol__OilRig__MissionDefs__blackout.lua
+--- Oil_petrol__OilRig__MissionDefs__blackout.lua	2026-11-12 11:54:52.866831623 +0000
++++ Oil_petrol__OilRig__MissionDefs__blackout.lua	2026-11-12 12:01:50.284361570 +0000
+@@ -2,7 +2,9 @@
+ return {
+ 	Id = "blackout", Title = "Apagão Total", Weight = 3, Duration = 150, Reward = 180,
+ 	Description = "Perdemos a energia. 1) Rearme o disjuntor no painel elétrico. 2) Parta o gerador de emergência.",
+-	CanStart = function(ctx) return ctx.Systems.Power.IsOn() end,
++	CanStart = function(ctx)
++		return ctx.Systems.Power.IsOn() and ctx.Objects:FindFirstChild("Generator") ~= nil and ctx.Objects:FindFirstChild("BreakerPanel") ~= nil
++	end,
+ 	Start = function(ctx, m)
+ 		m:SetGoal(2)
+ 		ctx.Systems.Power.Blackout()
+diff -u src/Oil_petrol__OilRig__MissionDefs__crane.lua src2/Oil_petrol__OilRig__MissionDefs__crane.lua
+--- Oil_petrol__OilRig__MissionDefs__crane.lua	2026-11-12 11:54:52.866918126 +0000
++++ Oil_petrol__OilRig__MissionDefs__crane.lua	2026-11-12 12:01:50.284468585 +0000
+@@ -2,6 +2,7 @@
+ return {
+ 	Id = "crane", Title = "Operação do Guindaste", Weight = 2, Duration = 120, Reward = 140,
+ 	Description = "Gire o guindaste até o ângulo-alvo mostrado no console (tolerância de 3°).",
++	CanStart = function(ctx) return ctx.Systems.Crane ~= nil and ctx.Systems.Crane.Ready() end,
+ 	Start = function(ctx, m)
+ 		local options = { -28, -20, -12, 12, 20, 28 }
+ 		local target = options[math.random(1, #options)]
+diff -u src/Oil_petrol__OilRig__MissionDefs__fires.lua src2/Oil_petrol__OilRig__MissionDefs__fires.lua
+--- Oil_petrol__OilRig__MissionDefs__fires.lua	2026-11-12 11:54:52.866848266 +0000
++++ Oil_petrol__OilRig__MissionDefs__fires.lua	2026-11-12 12:01:50.284380180 +0000
+@@ -2,9 +2,12 @@
+ return {
+ 	Id = "fires", Title = "Focos de Incêndio", Weight = 4, Duration = 140, Reward = 200,
+ 	Description = "Há incêndios na plataforma! Pegue o extintor no armário de emergência e apague todos os focos.",
++	CanStart = function(ctx)
++		return ctx.Systems.Fire ~= nil and ctx.Util.CountObjects("^FireSpot_", function(o) return o:IsA("BasePart") and not o:FindFirstChildOfClass("Fire") end) > 0
++	end,
+ 	Start = function(ctx, m)
+ 		local n = ctx.Systems.Fire.Spawn(3)
+-		if n == 0 then m:Complete() return end
++		if n == 0 then error("nenhum ponto de incêndio disponível") end -- antes: concluía sem objetivo
+ 		m:SetGoal(n)
+ 		ctx.Systems.Radio.Say("CONTROLE", "Incêndio! Armário de emergência tem extintores. Mirem na base das chamas.")
+ 		m:Connect(ctx.Bus.On("FireOut", function(plr)
+diff -u src/Oil_petrol__OilRig__MissionDefs__inspection.lua src2/Oil_petrol__OilRig__MissionDefs__inspection.lua
+--- Oil_petrol__OilRig__MissionDefs__inspection.lua	2026-11-12 11:54:52.866900164 +0000
++++ Oil_petrol__OilRig__MissionDefs__inspection.lua	2026-11-12 12:01:50.284441177 +0000
+@@ -2,6 +2,13 @@
+ return {
+ 	Id = "inspection", Title = "Ronda de Inspeção", Weight = 3, Duration = 200, Reward = 170,
+ 	Description = "Inspecione os 4 pontos marcados com luz laranja espalhados pela plataforma.",
++	CanStart = function(ctx)
++		for i = 1, 4 do
++			local cp = ctx.Objects:FindFirstChild("Checkpoint_" .. i)
++			if not (cp and cp:FindFirstChild("Marker") and cp:FindFirstChild("Terminal")) then return false end
++		end
++		return true
++	end,
+ 	Start = function(ctx, m)
+ 		m:SetGoal(4)
+ 		ctx.Systems.Inspection.Activate({ 1, 2, 3, 4 })
+diff -u src/Oil_petrol__OilRig__MissionDefs__pressure.lua src2/Oil_petrol__OilRig__MissionDefs__pressure.lua
+--- Oil_petrol__OilRig__MissionDefs__pressure.lua	2026-11-12 11:54:52.866814388 +0000
++++ Oil_petrol__OilRig__MissionDefs__pressure.lua	2026-11-12 12:01:50.284342197 +0000
+@@ -2,6 +2,9 @@
+ return {
+ 	Id = "pressure", Title = "Pressão Crítica", Weight = 4, Duration = 120, Reward = 160,
+ 	Description = "O duto principal está sobrecarregado. Gire as válvulas até a pressão cair para a faixa segura.",
++	CanStart = function(ctx)
++		return ctx.Util.CountObjects("^Valve_", function(o) return o:FindFirstChild("Wheel") ~= nil end) > 0
++	end,
+ 	Start = function(ctx, m)
+ 		local P = ctx.Systems.Pressure
+ 		local cfg = ctx.Config.Pressure
+diff -u src/Oil_petrol__OilRig__Modules__Config.lua src2/Oil_petrol__OilRig__Modules__Config.lua
+--- Oil_petrol__OilRig__Modules__Config.lua	2026-11-12 11:54:52.865783140 +0000
++++ Oil_petrol__OilRig__Modules__Config.lua	2026-11-12 12:01:50.283849519 +0000
+@@ -37,8 +37,25 @@
+ 	NormalSpeed = 16,
+ }
+ 
++-- Valores de recompensa (continuam configuráveis). Só são pagos se Config.Economy.Enabled = true.
+ Config.Rewards = { FireOut = 10, Valve = 4, Inspect = 12, Barrel = 15, Supply = 25 }
+ 
++-- Integração com a economia principal do jogo (ainda NÃO existe economia global).
++-- Enquanto Enabled = false nenhum saldo é criado ou alterado: as recompensas são apenas
++-- anunciadas no Bus como "RewardEarned"(player, valor, motivo) para uma integração futura.
++Config.Economy = {
++	Enabled = false,
++	-- "custom": usa a função registrada com Util.SetRewardProvider(fn(player, valor, motivo) -> valorPago)
++	-- "leaderstats": soma em leaderstats[Currency] SOMENTE se esse valor já existir (nunca cria pasta/valor)
++	Provider = "custom",
++	Currency = "Dinheiro",
++	-- política de divisão do prêmio da missão entre colaboradores:
++	-- "full" = cada colaborador recebe o valor integral (comportamento original)
++	-- "split" = o valor é dividido igualmente entre os colaboradores
++	-- "none" = a missão não paga prêmio final (só as ações individuais)
++	MissionPayout = "full",
++}
++
+ Config.Heli = {
+ 	Distance = 520,        -- distância de onde o helicóptero vem
+ 	Altitude = 70,
+@@ -47,7 +64,10 @@
+ }
+ 
+ Config.Crane = {
+-	Pivot = Vector3.new(-1102.4, 58.5, 1247.5), -- eixo da base giratória
++	-- eixo da base giratória RELATIVO ao pivot do modelo "Crane" (acompanha a plataforma se ela for movida).
++	-- Se o pivot do modelo Crane for editado no Studio, meça de novo este valor.
++	PivotLocal = Vector3.new(7.84434, 16.29778, -0.01929),
++	Pivot = Vector3.new(-1102.4, 58.5, 1247.5), -- legado (coordenada de mundo); usado só se PivotLocal = nil
+ 	MaxAngle = 35,
+ 	Step = 10,
+ 	TweenTime = 1.4,
+@@ -55,10 +75,26 @@
+ 
+ Config.Hud = { ExtraRadius = 260 }
+ 
+--- Cole aqui IDs de som (ex.: rbxassetid://123). Vazio = sem som.
++-- Áudio centralizado. Cole IDs autorizados (ex.: "rbxassetid://123" ou só o número). Vazio = sem som.
++-- A ausência de um ID nunca interrompe sistemas ou missões.
+ Config.Sounds = {
+-	Alarm = "", Explosion = "", Valve = "", Generator = "", Blackout = "",
+-	Heli = "", Complete = "", Fail = "", Extinguisher = "", Radio = "",
++	-- alarmes e sirenes
++	Alarm = "",            -- sirene geral (loop enquanto houver alarme)
++	-- efeitos
++	Explosion = "", Valve = "", Generator = "", Blackout = "", Extinguisher = "",
++	FireLoop = "",         -- loop em cada foco de incêndio
++	CargoPickup = "", CargoDeliver = "",
++	CraneMotor = "",       -- enquanto o guindaste gira
++	Radio = "",            -- bipe a cada mensagem do rádio do CONTROLE
++	-- veículos
++	Heli = "",             -- rotor do helicóptero (loop)
++	-- missão
++	MissionStart = "", Complete = "", Fail = "",
++	-- música de missão (loop durante a missão). Chave = Id da missão; Default vale para as demais.
++	Music = {
++		Default = "",
++		pressure = "", blackout = "", fires = "", barrels = "", airdrop = "", inspection = "", crane = "",
++	},
+ }
+ 
+ return Config
+diff -u src/Oil_petrol__OilRig__Modules__Missions.lua src2/Oil_petrol__OilRig__Modules__Missions.lua
+--- Oil_petrol__OilRig__Modules__Missions.lua	2026-11-12 11:54:52.865891224 +0000
++++ Oil_petrol__OilRig__Modules__Missions.lua	2026-11-12 12:01:50.283991282 +0000
+@@ -29,6 +29,7 @@
+ 	if self.Ended then return end
+ 	self.Ended = true
+ 	for _, c in ipairs(self._conns) do pcall(function() c:Disconnect() end) end
++	if self.Music then pcall(function() self.Music:Destroy() end) self.Music = nil end
+ 	if self.Def.Cleanup then pcall(self.Def.Cleanup, ctx, self) end
+ 	if not ok and self.Def.OnFail then pcall(self.Def.OnFail, ctx, self, reason) end
+ 	if ok then
+@@ -37,14 +38,20 @@
+ 			local left = self.EndsAt - workspace:GetServerTimeNow()
+ 			if left > self.Def.Duration * 0.5 then reward = math.floor(reward * 1.25) end
+ 		end
+-		local n = 0
++		-- política de divisão configurável (Config.Economy.MissionPayout)
++		local present = {}
+ 		for p in pairs(self.Contributors) do
+-			if p.Parent then
+-				ctx.Util.Pay(p, reward)
+-				n += 1
+-			end
++			if p.Parent then table.insert(present, p) end
++		end
++		local policy = ctx.Config.Economy and ctx.Config.Economy.MissionPayout or "full"
++		local each = reward
++		if policy == "split" then each = #present > 0 and math.floor(reward / #present) or 0
++		elseif policy == "none" then each = 0 end
++		local paid = 0
++		for _, p in ipairs(present) do
++			paid = math.max(paid, ctx.Util.Pay(p, each, "missao:" .. self.Def.Id))
+ 		end
+-		ctx.Systems.Radio.Notify("success", "MISSÃO CUMPRIDA: " .. self.Def.Title .. " (+" .. reward .. ")")
++		ctx.Systems.Radio.Notify("success", "MISSÃO CUMPRIDA: " .. self.Def.Title .. (paid > 0 and (" (+" .. paid .. ")") or ""))
+ 		ctx.Systems.Radio.Say("CONTROLE", "Excelente trabalho, equipe. Situação sob controle.")
+ 		ctx.Util.PlaySound(workspace, ctx.Config.Sounds.Complete, { Volume = 0.6 })
+ 		ctx.Bus.Fire("MissionComplete", self.Def.Id)
+@@ -68,11 +75,19 @@
+ 
+ function Missions.Active() return active end
+ 
++-- CanStart protegido: um erro numa definição não derruba o diretor nem o quadro
++local function eligible(def)
++	if not def.CanStart then return true end
++	local ok, res = pcall(def.CanStart, ctx)
++	if not ok then warn("[OilRig] erro em CanStart de " .. tostring(def.Id) .. ": " .. tostring(res)) end
++	return ok and res and true or false
++end
++
+ function Missions.Start(id)
+ 	if active then return false end
+ 	local def = defs[id]
+ 	if not def then return false end
+-	if def.CanStart and not def.CanStart(ctx) then return false end
++	if not eligible(def) then return false end
+ 	seq += 1
+ 	local m = setmetatable({
+ 		Def = def, Progress = 0, Goal = 1, Contributors = {}, Ended = false, _conns = {}, _seq = seq,
+@@ -88,6 +103,11 @@
+ 	ctx.State.Set("MissionGoal", 1)
+ 	ctx.State.Set("MissionEndsAt", m.EndsAt)
+ 	ctx.Systems.Radio.Notify("warn", "NOVA MISSÃO: " .. def.Title)
++	local snd = ctx.Config.Sounds
++	ctx.Util.PlaySound(workspace, snd.MissionStart, { Volume = 0.6 })
++	local music = snd.Music and (snd.Music[def.Id] ~= "" and snd.Music[def.Id] or snd.Music.Default)
++	m.Music = ctx.Util.PlaySound(ctx.Objects:FindFirstChild("MissionBoard") or workspace, music,
++		{ Looped = true, Volume = 0.35, Range = ctx.State.Get("RigRadius") or 400 })
+ 	local ok, err = pcall(def.Start, ctx, m)
+ 	if not ok then
+ 		warn("[OilRig] erro ao iniciar missão " .. id .. ": " .. tostring(err))
+@@ -108,7 +128,7 @@
+ local function pick()
+ 	local pool, total = {}, 0
+ 	for id, def in pairs(defs) do
+-		if id ~= lastId and (not def.CanStart or def.CanStart(ctx)) then
++		if id ~= lastId and eligible(def) then
+ 			local w = def.Weight or 1
+ 			table.insert(pool, { id, w })
+ 			total += w
+diff -u src/Oil_petrol__OilRig__Modules__Systems__Cargo.lua src2/Oil_petrol__OilRig__Modules__Systems__Cargo.lua
+--- Oil_petrol__OilRig__Modules__Systems__Cargo.lua	2026-11-12 11:54:52.866652235 +0000
++++ Oil_petrol__OilRig__Modules__Systems__Cargo.lua	2026-11-12 12:01:50.284211072 +0000
+@@ -2,6 +2,7 @@
+ local Cargo = {}
+ local ctx, cfg
+ local world = {}     -- [part] = kind
++local carried = {}   -- [tool] = kind (Tools de carga entregues aos jogadores)
+ local dock
+ 
+ local function carrying(player)
+@@ -33,7 +34,11 @@
+ 		local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+ 		if h then h.WalkSpeed = cfg.NormalSpeed end
+ 	end)
+-	tool.Parent = player:FindFirstChildOfClass("Backpack")
++	local bp = player:FindFirstChildOfClass("Backpack")
++	if not bp then tool:Destroy() return false end
++	carried[tool] = kind == "Barril" and "Barril" or "Suprimento"
++	tool.Destroying:Connect(function() carried[tool] = nil end)
++	tool.Parent = bp
+ 	return true
+ end
+ 
+@@ -73,6 +78,7 @@
+ 		if giveTool(player, kind == "Barril" and "Barril" or "Caixa de Suprimentos") then
+ 			world[p] = nil
+ 			p:Destroy()
++			ctx.Util.PlaySound(ctx.Util.Root(player), ctx.Config.Sounds.CargoPickup, { Volume = 0.6 })
+ 			ctx.Bus.Fire("CargoPicked", player, kind)
+ 		end
+ 	end)
+@@ -118,6 +124,13 @@
+ 			p:Destroy()
+ 		end
+ 	end
++	-- também recolhe as Tools carregadas (mochila, mão ou largadas no chão); Destroying restaura a velocidade
++	for tool, k in pairs(table.clone(carried)) do
++		if not kind or k == kind then
++			carried[tool] = nil
++			tool:Destroy()
++		end
++	end
+ end
+ 
+ function Cargo.Init(c)
+@@ -136,9 +149,10 @@
+ 		local kind = tool.Name == "Barril" and "Barril" or "Suprimento"
+ 		tool:Destroy()
+ 		local reward = kind == "Barril" and ctx.Config.Rewards.Barrel or ctx.Config.Rewards.Supply
+-		ctx.Util.Pay(player, reward)
++		local paid = ctx.Util.Pay(player, reward, "carga:" .. kind)
++		ctx.Util.PlaySound(dock, ctx.Config.Sounds.CargoDeliver, { Volume = 0.7 })
+ 		ctx.State.Set("Delivered", (ctx.State.Get("Delivered") or 0) + 1)
+-		ctx.Systems.Radio.Notify("success", "+" .. reward .. " • carga entregue", player)
++		ctx.Systems.Radio.Notify("success", (paid > 0 and ("+" .. paid .. " • ") or "") .. "carga entregue", player)
+ 		if ctx.Systems.Crane then ctx.Systems.Crane.Flourish() end
+ 		ctx.Bus.Fire("CargoDelivered", player, kind)
+ 	end)
+diff -u src/Oil_petrol__OilRig__Modules__Systems__Crane.lua src2/Oil_petrol__OilRig__Modules__Systems__Crane.lua
+--- Oil_petrol__OilRig__Modules__Systems__Crane.lua	2026-11-12 11:54:52.866693017 +0000
++++ Oil_petrol__OilRig__Modules__Systems__Crane.lua	2026-11-12 12:01:50.284247104 +0000
+@@ -1,28 +1,31 @@
+ -- Guindaste: gira a base (todas as peças do modelo "Crane") ao redor do eixo vertical.
+ local Crane = {}
+ local ctx, cfg
+-local crane, origin
++local crane, origin, pivotPos
+ local angle = 0
+ local busy = false
+ local display
+ 
+ local function applyAngle(deg)
+-	local pivot = CFrame.new(cfg.Pivot)
++	local pivot = CFrame.new(pivotPos)
+ 	crane:PivotTo(pivot * CFrame.Angles(0, math.rad(deg), 0) * pivot:Inverse() * origin)
+ end
+ 
+ function Crane.GetAngle() return angle end
++function Crane.Ready() return crane ~= nil and crane.Parent ~= nil end
+ 
+ function Crane.SetAngle(target, player)
+-	if busy then return false end
++	if busy or not Crane.Ready() then return false end
+ 	target = math.clamp(target, -cfg.MaxAngle, cfg.MaxAngle)
+ 	busy = true
+ 	local from = angle
+ 	local nv = Instance.new("NumberValue")
+ 	nv.Value = from
+ 	local conn = nv.Changed:Connect(function(v) applyAngle(v) end)
++	local motor = ctx.Util.PlaySound(crane:FindFirstChildWhichIsA("BasePart", true), ctx.Config.Sounds.CraneMotor, { Looped = true, Volume = 0.6, Range = 120 })
+ 	local tw = ctx.Util.Tween(nv, cfg.TweenTime, { Value = target }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+ 	tw.Completed:Wait()
++	if motor then motor:Destroy() end
+ 	conn:Disconnect()
+ 	nv:Destroy()
+ 	applyAngle(target)
+@@ -35,7 +38,7 @@
+ end
+ 
+ function Crane.Flourish()
+-	if busy then return end
++	if busy or not Crane.Ready() then return end
+ 	task.spawn(function()
+ 		local back = angle
+ 		Crane.SetAngle(math.clamp(back + 18, -cfg.MaxAngle, cfg.MaxAngle))
+@@ -63,6 +66,8 @@
+ 	local console = ctx.Objects:FindFirstChild("CraneConsole")
+ 	if not crane or not console then warn("[OilRig] Guindaste ou console ausente") return end
+ 	origin = crane:GetPivot()
++	-- eixo relativo ao próprio guindaste: continua correto se a plataforma for movida/girada no mapa
++	pivotPos = cfg.PivotLocal and origin:PointToWorldSpace(cfg.PivotLocal) or cfg.Pivot
+ 	display = ctx.Util.Screen(console, Enum.NormalId.Front, "GUINDASTE")
+ 	Crane.Refresh()
+ 	ctx.State.Set("CraneAngle", 0)
+diff -u src/Oil_petrol__OilRig__Modules__Systems__Fire.lua src2/Oil_petrol__OilRig__Modules__Systems__Fire.lua
+--- Oil_petrol__OilRig__Modules__Systems__Fire.lua	2026-11-12 11:54:52.866620346 +0000
++++ Oil_petrol__OilRig__Modules__Systems__Fire.lua	2026-11-12 12:01:50.284165091 +0000
+@@ -30,7 +30,8 @@
+ 	l.Brightness = 2.5
+ 	l.Shadows = false
+ 	l.Parent = spot
+-	active[spot] = { fire = f, smoke = s, light = l, health = 100 }
++	local snd = ctx.Util.PlaySound(spot, ctx.Config.Sounds.FireLoop, { Looped = true, Volume = 0.5, Range = 80 })
++	active[spot] = { fire = f, smoke = s, light = l, sound = snd, health = 100 }
+ 	count += 1
+ 	refresh()
+ 	return true
+@@ -40,10 +41,11 @@
+ 	local d = active[spot]
+ 	if not d then return end
+ 	d.fire:Destroy() d.smoke:Destroy() d.light:Destroy()
++	if d.sound then d.sound:Destroy() end
+ 	active[spot] = nil
+ 	count -= 1
+ 	refresh()
+-	if player then ctx.Util.Pay(player, ctx.Config.Rewards.FireOut) end
++	if player then ctx.Util.Pay(player, ctx.Config.Rewards.FireOut, "fogo") end
+ 	ctx.Bus.Fire("FireOut", player, spot)
+ end
+ 
+diff -u src/Oil_petrol__OilRig__Modules__Systems__Helicopter.lua src2/Oil_petrol__OilRig__Modules__Systems__Helicopter.lua
+--- Oil_petrol__OilRig__Modules__Systems__Helicopter.lua	2026-11-12 11:54:52.866750188 +0000
++++ Oil_petrol__OilRig__Modules__Systems__Helicopter.lua	2026-11-12 12:01:50.284281113 +0000
+@@ -74,7 +74,11 @@
+ 	running = true
+ 	dismiss = false
+ 	task.spawn(function()
+-		local model, parts, strobe = build()
++		local model, conn
++		local alive = true
++		local okRun, err = pcall(function()
++		local parts, strobe
++		model, parts, strobe = build()
+ 		model.Parent = workspace
+ 		local list, cfs = {}, {}
+ 		for i, d in ipairs(parts) do list[i] = d[1] end
+@@ -91,8 +95,7 @@
+ 		local heading = CFrame.lookAt(Vector3.zero, -dir) -- olha para a plataforma
+ 		local tilt = 0
+ 		local spin = 0
+-		local alive = true
+-		local conn = RunService.Heartbeat:Connect(function(dt)
++		conn = RunService.Heartbeat:Connect(function(dt)
+ 			spin += dt * 38
+ 			local base = CFrame.new(pos) * heading * CFrame.Angles(tilt, 0, 0)
+ 			for i, d in ipairs(parts) do
+@@ -133,7 +136,8 @@
+ 		fly(land, 7, false, 0)
+ 		ctx.Systems.Radio.Say("PILOTO", "Pousado. Descarreguem as caixas e levem à doca!")
+ 		Heli.Landed = true
+-		ctx.Systems.Cargo.SpawnCrates(cfg.CrateCount)
++		-- se a missão foi encerrada durante o voo, não deixa caixas órfãs na plataforma
++		if not dismiss then ctx.Systems.Cargo.SpawnCrates(cfg.CrateCount) end
+ 		ctx.Bus.Fire("HeliLanded")
+ 
+ 		local waited = 0
+@@ -146,9 +150,12 @@
+ 		local away = padPos + (-dir + Vector3.new(0.4, 0, 0.3)).Unit * cfg.Distance + Vector3.new(0, cfg.Altitude + 30, 0)
+ 		fly(away, 16, true, 0.2)
+ 
++		end)
++		-- limpeza garantida mesmo se algo falhar no meio do voo (evita helicóptero "em operação" para sempre)
++		if not okRun then warn("[OilRig] falha no voo do helicóptero: " .. tostring(err)) end
+ 		alive = false
+-		conn:Disconnect()
+-		model:Destroy()
++		if conn then conn:Disconnect() end
++		if model then model:Destroy() end
+ 		Heli.Landed = false
+ 		running = false
+ 		ctx.Bus.Fire("HeliGone")
+diff -u src/Oil_petrol__OilRig__Modules__Systems__Radio.lua src2/Oil_petrol__OilRig__Modules__Systems__Radio.lua
+--- Oil_petrol__OilRig__Modules__Systems__Radio.lua	2026-11-12 11:54:52.865930490 +0000
++++ Oil_petrol__OilRig__Modules__Systems__Radio.lua	2026-11-12 12:01:50.284033089 +0000
+@@ -5,6 +5,7 @@
+ function Radio.Init(c) ctx = c end
+ 
+ function Radio.Say(speaker, text, player)
++	if not player then ctx.Util.PlaySound(workspace, ctx.Config.Sounds.Radio, { Volume = 0.35 }) end
+ 	if player then
+ 		ctx.Remotes.Radio:FireClient(player, speaker, text)
+ 	else
+diff -u src/Oil_petrol__OilRig__Modules__Util.lua src2/Oil_petrol__OilRig__Modules__Util.lua
+--- Oil_petrol__OilRig__Modules__Util.lua	2026-11-12 11:54:52.865853001 +0000
++++ Oil_petrol__OilRig__Modules__Util.lua	2026-11-12 12:01:50.283931120 +0000
+@@ -3,37 +3,58 @@
+ local Debris = game:GetService("Debris")
+ 
+ local Util = {}
++local ctx
++local rewardProvider
+ 
++function Util.Init(c) ctx = c end
++
++-- Nunca lança erro: ID vazio, inválido ou numérico é tratado aqui.
+ function Util.PlaySound(parent, id, opts)
+-	if not id or id == "" then return nil end
++	if type(id) == "number" then id = "rbxassetid://" .. id end
++	if type(id) ~= "string" or id == "" or not parent then return nil end
+ 	opts = opts or {}
+-	local s = Instance.new("Sound")
+-	s.SoundId = id
+-	s.Volume = opts.Volume or 0.6
+-	s.Looped = opts.Looped or false
+-	s.RollOffMaxDistance = opts.Range or 140
+-	s.PlaybackSpeed = opts.Pitch or 1
+-	s.Parent = parent
+-	s:Play()
+-	if not s.Looped then Debris:AddItem(s, 20) end
+-	return s
+-end
+-
+-function Util.Pay(player, amount)
+-	if not player or not player.Parent or amount <= 0 then return end
+-	local ls = player:FindFirstChild("leaderstats")
+-	if not ls then
+-		ls = Instance.new("Folder")
+-		ls.Name = "leaderstats"
+-		ls.Parent = player
+-	end
+-	local cash = ls:FindFirstChild("Dinheiro")
+-	if not cash then
+-		cash = Instance.new("IntValue")
+-		cash.Name = "Dinheiro"
+-		cash.Parent = ls
++	local ok, s = pcall(function()
++		local s = Instance.new("Sound")
++		s.SoundId = id
++		s.Volume = opts.Volume or 0.6
++		s.Looped = opts.Looped or false
++		s.RollOffMaxDistance = opts.Range or 140
++		s.PlaybackSpeed = opts.Pitch or 1
++		s.Parent = parent
++		s:Play()
++		if not s.Looped then Debris:AddItem(s, 20) end
++		return s
++	end)
++	if ok then return s end
++	warn("[OilRig] som não pôde tocar (" .. tostring(id) .. "): " .. tostring(s))
++	return nil
++end
++
++-- ===== recompensas: interface de integração com a economia principal =====
++-- Registra a função da economia global: fn(player, valor, motivo) -> valor efetivamente pago
++function Util.SetRewardProvider(fn) rewardProvider = fn end
++
++-- Devolve o valor efetivamente pago (0 enquanto a economia não estiver integrada/autorizada).
++function Util.Pay(player, amount, reason)
++	if not player or not player.Parent or type(amount) ~= "number" or amount <= 0 then return 0 end
++	amount = math.floor(amount)
++	local eco = ctx and ctx.Config.Economy
++	if ctx then ctx.Bus.Fire("RewardEarned", player, amount, reason) end
++	if not eco or not eco.Enabled then return 0 end
++	if eco.Provider == "custom" then
++		if not rewardProvider then return 0 end
++		local ok, paid = pcall(rewardProvider, player, amount, reason)
++		if not ok then warn("[OilRig] erro no provedor de recompensa: " .. tostring(paid)) return 0 end
++		return tonumber(paid) or 0
++	elseif eco.Provider == "leaderstats" then
++		local ls = player:FindFirstChild("leaderstats")
++		local cash = ls and ls:FindFirstChild(eco.Currency or "Dinheiro")
++		if cash and (cash:IsA("IntValue") or cash:IsA("NumberValue")) then
++			cash.Value += amount
++			return amount
++		end
+ 	end
+-	cash.Value += math.floor(amount)
++	return 0
+ end
+ 
+ function Util.Tween(inst, time, props, style, dir)
+@@ -61,6 +82,16 @@
+ 	return out
+ end
+ 
++-- conta filhos de RigObjects cujo nome casa com o padrão (usado pelos CanStart das missões)
++function Util.CountObjects(pattern, pred)
++	local n = 0
++	if not ctx then return 0 end
++	for _, o in ipairs(ctx.Objects:GetChildren()) do
++		if o.Name:match(pattern) and (not pred or pred(o)) then n += 1 end
++	end
++	return n
++end
++
+ function Util.Prompt(parent, action, object, hold, key)
+ 	local pp = Instance.new("ProximityPrompt")
+ 	pp.ActionText = action
+@@ -1,27 +1,27 @@
+ Script	Oil petrol/Top Platform/Door/Main	40	disabled=true	RBX55C72087467F499991FCAABD8A58E9A0	Oil_petrol__Top_Platform__Door__Main.lua
+ Script	Oil petrol/Top Platform/Items/Functions/Light/Function	27	disabled=true	RBXF93F73FD4B1B43999321BC7CD8D1A477	Oil_petrol__Top_Platform__Items__Functions__Light__Function.lua
+ Script	Oil petrol/Top Platform/Functions/Light/Function	27	disabled=true	RBX5872754A03F64FDE97CAED87168D6EE4	Oil_petrol__Top_Platform__Functions__Light__Function.lua
+-Script	Oil petrol/OilRig/Core	86	disabled=false	RBX3CCCD79EBAE44B7A898B70D834953140	Oil_petrol__OilRig__Core.lua
+-ModuleScript	Oil petrol/OilRig/Modules/Config	64	disabled=	RBX7DEAAC7391B345B98EBF717BC5E3F4A8	Oil_petrol__OilRig__Modules__Config.lua
++Script	Oil petrol/OilRig/Core	129	disabled=false	RBX3CCCD79EBAE44B7A898B70D834953140	Oil_petrol__OilRig__Core.lua
++ModuleScript	Oil petrol/OilRig/Modules/Config	100	disabled=	RBX7DEAAC7391B345B98EBF717BC5E3F4A8	Oil_petrol__OilRig__Modules__Config.lua
+ ModuleScript	Oil petrol/OilRig/Modules/Bus	25	disabled=	RBXD8B01A9B7B744E6C9A7BD76250670134	Oil_petrol__OilRig__Modules__Bus.lua
+ ModuleScript	Oil petrol/OilRig/Modules/State	15	disabled=	RBX0663974D25C24BE295621C3106BAE8DD	Oil_petrol__OilRig__Modules__State.lua
+-ModuleScript	Oil petrol/OilRig/Modules/Util	113	disabled=	RBX23ADE15A62574829B90C6A6CD5D465F4	Oil_petrol__OilRig__Modules__Util.lua
+-ModuleScript	Oil petrol/OilRig/Modules/Missions	207	disabled=	RBXBB5683FE26BA405E8B79FCD038695D6F	Oil_petrol__OilRig__Modules__Missions.lua
+-ModuleScript	Oil petrol/OilRig/Modules/Systems/Radio	28	disabled=	RBXC656C6DB7F884CF899092C3935253D68	Oil_petrol__OilRig__Modules__Systems__Radio.lua
++ModuleScript	Oil petrol/OilRig/Modules/Util	144	disabled=	RBX23ADE15A62574829B90C6A6CD5D465F4	Oil_petrol__OilRig__Modules__Util.lua
++ModuleScript	Oil petrol/OilRig/Modules/Missions	227	disabled=	RBXBB5683FE26BA405E8B79FCD038695D6F	Oil_petrol__OilRig__Modules__Missions.lua
++ModuleScript	Oil petrol/OilRig/Modules/Systems/Radio	29	disabled=	RBXC656C6DB7F884CF899092C3935253D68	Oil_petrol__OilRig__Modules__Systems__Radio.lua
+ ModuleScript	Oil petrol/OilRig/Modules/Systems/Alarm	68	disabled=	RBX9C30A69A9EA74E0EB821F0AD20FA4D99	Oil_petrol__OilRig__Modules__Systems__Alarm.lua
+ ModuleScript	Oil petrol/OilRig/Modules/Systems/Pressure	158	disabled=	RBXB61FDC5B461B4C7BBEF090EB88D5C71C	Oil_petrol__OilRig__Modules__Systems__Pressure.lua
+ ModuleScript	Oil petrol/OilRig/Modules/Systems/Power	110	disabled=	RBXF7D65A56FC0141DBAE93E608C2225E56	Oil_petrol__OilRig__Modules__Systems__Power.lua
+-ModuleScript	Oil petrol/OilRig/Modules/Systems/Fire	145	disabled=	RBX09FFBF8E08B64A6E953DE7630A034A83	Oil_petrol__OilRig__Modules__Systems__Fire.lua
+-ModuleScript	Oil petrol/OilRig/Modules/Systems/Cargo	148	disabled=	RBX29F975D5AF284F6F81CD2DC8DD1DE138	Oil_petrol__OilRig__Modules__Systems__Cargo.lua
+-ModuleScript	Oil petrol/OilRig/Modules/Systems/Crane	77	disabled=	RBX227A7F8396504B55AF97A6F847EF25AC	Oil_petrol__OilRig__Modules__Systems__Crane.lua
+-ModuleScript	Oil petrol/OilRig/Modules/Systems/Helicopter	175	disabled=	RBX3D22E7D70D494D9BBF29B372E2E01B4D	Oil_petrol__OilRig__Modules__Systems__Helicopter.lua
++ModuleScript	Oil petrol/OilRig/Modules/Systems/Fire	147	disabled=	RBX09FFBF8E08B64A6E953DE7630A034A83	Oil_petrol__OilRig__Modules__Systems__Fire.lua
++ModuleScript	Oil petrol/OilRig/Modules/Systems/Cargo	162	disabled=	RBX29F975D5AF284F6F81CD2DC8DD1DE138	Oil_petrol__OilRig__Modules__Systems__Cargo.lua
++ModuleScript	Oil petrol/OilRig/Modules/Systems/Crane	82	disabled=	RBX227A7F8396504B55AF97A6F847EF25AC	Oil_petrol__OilRig__Modules__Systems__Crane.lua
++ModuleScript	Oil petrol/OilRig/Modules/Systems/Helicopter	182	disabled=	RBX3D22E7D70D494D9BBF29B372E2E01B4D	Oil_petrol__OilRig__Modules__Systems__Helicopter.lua
+ ModuleScript	Oil petrol/OilRig/Modules/Systems/Inspection	52	disabled=	RBX65C90E0B25964B4EBD035AEB8A06EE28	Oil_petrol__OilRig__Modules__Systems__Inspection.lua
+-ModuleScript	Oil petrol/OilRig/MissionDefs/pressure	20	disabled=	RBX0430AB45861247C696CBB087B2189542	Oil_petrol__OilRig__MissionDefs__pressure.lua
+-ModuleScript	Oil petrol/OilRig/MissionDefs/blackout	22	disabled=	RBX1DCEFA98D68F46FC9658B4731833920E	Oil_petrol__OilRig__MissionDefs__blackout.lua
+-ModuleScript	Oil petrol/OilRig/MissionDefs/fires	16	disabled=	RBXFEDC4553F7A1440287B8A77C83CEBE13	Oil_petrol__OilRig__MissionDefs__fires.lua
+-ModuleScript	Oil petrol/OilRig/MissionDefs/barrels	15	disabled=	RBXE9B022457D554022B27C1FE2B4C00BDE	Oil_petrol__OilRig__MissionDefs__barrels.lua
+-ModuleScript	Oil petrol/OilRig/MissionDefs/airdrop	17	disabled=	RBX3A02B5BFF2D94649B8EDE797C7FB8A01	Oil_petrol__OilRig__MissionDefs__airdrop.lua
+-ModuleScript	Oil petrol/OilRig/MissionDefs/inspection	18	disabled=	RBXBE743240087E4B0E8FFA8B4EFAB0D93F	Oil_petrol__OilRig__MissionDefs__inspection.lua
+-ModuleScript	Oil petrol/OilRig/MissionDefs/crane	19	disabled=	RBXCAACD9B809A6490386CA4E528D268CE7	Oil_petrol__OilRig__MissionDefs__crane.lua
++ModuleScript	Oil petrol/OilRig/MissionDefs/pressure	23	disabled=	RBX0430AB45861247C696CBB087B2189542	Oil_petrol__OilRig__MissionDefs__pressure.lua
++ModuleScript	Oil petrol/OilRig/MissionDefs/blackout	24	disabled=	RBX1DCEFA98D68F46FC9658B4731833920E	Oil_petrol__OilRig__MissionDefs__blackout.lua
++ModuleScript	Oil petrol/OilRig/MissionDefs/fires	19	disabled=	RBXFEDC4553F7A1440287B8A77C83CEBE13	Oil_petrol__OilRig__MissionDefs__fires.lua
++ModuleScript	Oil petrol/OilRig/MissionDefs/barrels	18	disabled=	RBXE9B022457D554022B27C1FE2B4C00BDE	Oil_petrol__OilRig__MissionDefs__barrels.lua
++ModuleScript	Oil petrol/OilRig/MissionDefs/airdrop	21	disabled=	RBX3A02B5BFF2D94649B8EDE797C7FB8A01	Oil_petrol__OilRig__MissionDefs__airdrop.lua
++ModuleScript	Oil petrol/OilRig/MissionDefs/inspection	25	disabled=	RBXBE743240087E4B0E8FFA8B4EFAB0D93F	Oil_petrol__OilRig__MissionDefs__inspection.lua
++ModuleScript	Oil petrol/OilRig/MissionDefs/crane	20	disabled=	RBXCAACD9B809A6490386CA4E528D268CE7	Oil_petrol__OilRig__MissionDefs__crane.lua
+ ModuleScript	Oil petrol/OilRig/MissionDefs/_Template	22	disabled=	RBX4296ED049E11441193095F3DE56440F0	Oil_petrol__OilRig__MissionDefs___Template.lua
+ LocalScript	Oil petrol/OilRig/Client/RigHUD	322	disabled=false	RBXA748881EAD114A5582593F3819DA3A09	Oil_petrol__OilRig__Client__RigHUD.lua
+\ No newline at end of file
