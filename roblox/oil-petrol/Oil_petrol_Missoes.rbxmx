@@ -157747,6 +157747,20 @@ function Util.PlayersNear(pos, radius)
 	return out
 end
 
+-- Prepara a cópia de uma Tool-modelo para ir à mão do jogador. Os modelos em OilRig/Tools ficam ANCORADOS
+-- (senão cairiam do mapa); uma cópia ancorada prende o personagem na posição da peça (0,0,0) ao equipar.
+function Util.PrepareTool(tool)
+	for _, d in ipairs(tool:GetDescendants()) do
+		if d:IsA("BasePart") then
+			d.Anchored = false
+			d.CanCollide = false
+			d.CanTouch = false
+			d.Massless = true
+		end
+	end
+	return tool
+end
+
 -- conta filhos de RigObjects cujo nome casa com o padrão (usado pelos CanStart das missões)
 function Util.CountObjects(pattern, pred)
 	local n = 0
@@ -158502,7 +158516,7 @@ local function giveExtinguisher(player)
 		ctx.Systems.Radio.Notify("info", "Você já está com o extintor.", player)
 		return
 	end
-	local tool = ctx.Rig.Tools.Extintor:Clone()
+	local tool = ctx.Util.PrepareTool(ctx.Rig.Tools.Extintor:Clone())
 	local handle = tool:FindFirstChild("Handle")
 	if handle and not handle:FindFirstChild("Spray") then
 		local e = Instance.new("ParticleEmitter")
@@ -158569,7 +158583,7 @@ local function giveTool(player, kind)
 	end
 	local template = ctx.Rig.Tools:FindFirstChild(kind)
 	if not template then return false end
-	local tool = template:Clone()
+	local tool = ctx.Util.PrepareTool(template:Clone())
 	tool.Equipped:Connect(function()
 		local h = tool.Parent and tool.Parent:FindFirstChildOfClass("Humanoid")
 		if h then h.WalkSpeed = cfg.CarrySpeed end

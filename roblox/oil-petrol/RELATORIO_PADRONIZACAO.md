@@ -117,3 +117,8 @@ Avisos **esperados** no Output durante o teste: `HelipadPad ausente` (simulaçã
 - **Helicóptero pelo console, fora de missão**: as caixas que ele deixa só são recolhidas por um `airdrop` posterior. É o comportamento original, mantido; com a economia ligada, o console permitiria repetir entregas a cada cerca de 95 s.
 - **Velocidade ao carregar**: `NormalSpeed = 16` sobrescreve a velocidade do personagem ao soltar ou destruir a Tool (original). Se o jogo tiver outro sistema de velocidade, conflita.
 - **Scripts legados** continuam desativados; a porta da Top Platform não abre. Reativar só depois de testar, porque usa API antiga (`:connect`, `wait`).
+
+## 7. Correção posterior ao playtest (Studio do dono)
+| Defeito confirmado em execução | Causa | Correção |
+|---|---|---|
+| Ao pegar extintor, barril ou caixa de suprimentos, o personagem ia para o meio do mapa, ficava preso e nada aparecia na mão. | Os modelos em `OilRig/Tools` têm o `Handle` **ancorado** e em (0,0,0) (necessário para não caírem do mapa). A cópia entregue ao jogador continuava ancorada; ao equipar, a mão era soldada a uma peça presa na origem. Defeito do modelo original, sem relação com mudar a plataforma de lugar. | `Util.PrepareTool` solta as peças da **cópia** (`Anchored = false`, sem colisão, `Massless`) antes de entregar. Usado em `Cargo.giveTool` e `Fire.giveExtinguisher`. Os modelos continuam ancorados. Scripts avulsos em `scripts/`. |
