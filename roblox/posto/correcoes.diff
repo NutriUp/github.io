@@ -1,0 +1,1626 @@
+diff -u src/GasStationArea__Convenience_Store__CashRegister__KeyPadTEST__KeypadScript.lua src2/GasStationArea__Convenience_Store__CashRegister__KeyPadTEST__KeypadScript.lua
+--- GasStationArea__Convenience_Store__CashRegister__KeyPadTEST__KeypadScript.lua	2026-11-12 13:14:05.781125816 +0000
++++ GasStationArea__Convenience_Store__CashRegister__KeyPadTEST__KeypadScript.lua	2026-11-12 13:24:02.322389683 +0000
+@@ -17,7 +17,7 @@
+ 			display.Text = "0.00"
+ 		else
+ 			if input[1] == "0" then
+-				table.remove(input, 0)
++				table.remove(input, 1) -- antes: índice 0 (erro "position out of bounds" no Output)
+ 			end
+ 			display.Text = table.concat(input)
+ 			local decimal = false
+@@ -32,7 +32,7 @@
+ 		end
+ 	else
+ 		display.Text = "0.00"
+-		total = total + tonumber(table.concat(input))
++		total = total + (tonumber(table.concat(input)) or 0)
+ 		totalDisplay.Text = total
+ 		customerDisplay.Text = total
+ 		if total %1 == 0 then
+diff -u src/GasStationArea__Posto__Client__PostoHUD.lua src2/GasStationArea__Posto__Client__PostoHUD.lua
+--- GasStationArea__Posto__Client__PostoHUD.lua	2026-11-12 13:14:05.797837283 +0000
++++ GasStationArea__Posto__Client__PostoHUD.lua	2026-11-12 13:24:02.336332062 +0000
+@@ -348,6 +348,41 @@
+ player:GetAttributeChangedSignal("PedidoAtual"):Connect(refreshOrder)
+ refreshSys() refreshMission() refreshRep() refreshOrder()
+ 
++-- ===== escala responsiva (celular/tablet) =====
++-- Mantém o visual original em telas grandes; em telas menores cada painel encolhe proporcionalmente
++-- e as posições acompanham, evitando sobreposição (ex.: rádio por cima da reputação em celular).
++local layoutPanels = {
++	{ sys, UDim2.new(0, 14, 0, 70) }, { rep, UDim2.new(0, 14, 0, 284) }, { card, UDim2.new(1, -14, 0, 70) },
++	{ orderChip, UDim2.new(0.5, 0, 1, -110) }, { radio, UDim2.new(0, 14, 1, -120) }, { toastHolder, UDim2.new(0.5, 0, 0, 74) },
++}
++for _, e in ipairs(layoutPanels) do
++	local s = Instance.new("UIScale")
++	s.Name = "EscalaHUD"
++	s.Parent = e[1]
++	e[3] = s
++end
++local function layout()
++	local cam = workspace.CurrentCamera
++	local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
++	if vp.X < 1 or vp.Y < 1 then return end
++	-- (vp.Y - 8) / 574: altura em que a coluna esquerda (até 336) e o rádio (238 a partir de baixo) não se tocam
++	local k = math.clamp(math.min(vp.X / 1280, vp.Y / 720, (vp.Y - 8) / 574), 0.5, 1)
++	for _, e in ipairs(layoutPanels) do
++		local p = e[2]
++		e[1].Position = UDim2.new(p.X.Scale, p.X.Offset * k, p.Y.Scale, p.Y.Offset * k)
++		e[3].Scale = k
++	end
++end
++local vpConn
++local function watchCamera()
++	if vpConn then vpConn:Disconnect() end
++	local cam = workspace.CurrentCamera
++	if cam then vpConn = cam:GetPropertyChangedSignal("ViewportSize"):Connect(layout) end
++	layout()
++end
++workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(watchCamera)
++watchCamera()
++
+ -- zoom dos binóculos
+ local normalFov = 70
+ player:GetAttributeChangedSignal("PostoZoom"):Connect(function()
+diff -u src/GasStationArea__Posto__Core.lua src2/GasStationArea__Posto__Core.lua
+--- GasStationArea__Posto__Core.lua	2026-11-12 13:14:05.795267766 +0000
++++ GasStationArea__Posto__Core.lua	2026-11-12 13:24:02.334765723 +0000
+@@ -88,6 +88,24 @@
+ 	end
+ end
+ 
++-- validação em runtime: avisa uma vez o que faltar (os sistemas/missões dependentes ficam indisponíveis)
++do
++	local missing = {}
++	for _, n in ipairs({ "MissionBoard", "BreakerPanel", "Generator", "PumpTerminal", "CashierSpot", "StoreDoor_In",
++		"StoreDoor_Out", "QueueSlot_1", "StrandedSpot", "Tanker_Start", "Tanker_Park", "Tanker_End", "TankerPort", "TankerRegulator" }) do
++		if not objects:FindFirstChild(n) then table.insert(missing, n) end
++	end
++	for _, pre in ipairs({ "Spawn_Street_", "Flee_", "BoxSpawn_", "ShelfDrop_", "ShutoffValve_", "FireLocker" }) do
++		local found = false
++		for _, o in ipairs(objects:GetChildren()) do
++			if o.Name:sub(1, #pre) == pre then found = true break end
++		end
++		if not found then table.insert(missing, pre .. "*") end
++	end
++	if not posto:FindFirstChild("Client") or not posto.Client:FindFirstChild("PostoHUD") then table.insert(missing, "Posto.Client.PostoHUD") end
++	if #missing > 0 then warn("[Posto] objetos ausentes em PostoObjects: " .. table.concat(missing, ", ")) end
++end
++
+ -- marcadores invisíveis em jogo (ficam visíveis no Studio para você mover)
+ for _, o in ipairs(objects:GetChildren()) do
+ 	if o:IsA("BasePart") and (o.Name:match("^Spawn_") or o.Name:match("^Flee_") or o.Name:match("^QueueSlot_")
+@@ -108,6 +126,8 @@
+ 	if ms then
+ 		local ok, mod = pcall(require, ms)
+ 		if ok then ctx.Systems[name] = mod else warn("[Posto] falha ao carregar " .. name .. ": " .. tostring(mod)) end
++	else
++		warn("[Posto] módulo ausente: " .. name)
+ 	end
+ end
+ for _, name in ipairs(order) do
+@@ -124,10 +144,11 @@
+ if not okm then warn("[Posto] erro em Missions.Init: " .. tostring(errm)) end
+ 
+ -- HUD do cliente
+-local template = posto.Client:FindFirstChild("PostoHUD")
++local template = posto:FindFirstChild("Client") and posto.Client:FindFirstChild("PostoHUD")
+ local function install(player)
+ 	task.spawn(function()
+-		Util.Stat(player)
++		-- (não cria mais leaderstats: a economia global ainda não existe — ver Config.Economy)
++		if not template then return end
+ 		local pg = player:WaitForChild("PlayerGui", 30)
+ 		if not pg or pg:FindFirstChild("PostoHUD") then return end
+ 		local gui = Instance.new("ScreenGui")
+diff -u src/GasStationArea__Posto__MissionDefs___Template.lua src2/GasStationArea__Posto__MissionDefs___Template.lua
+--- GasStationArea__Posto__MissionDefs___Template.lua	2026-11-12 13:14:05.797532902 +0000
++++ GasStationArea__Posto__MissionDefs___Template.lua	2026-11-12 13:24:02.335657474 +0000
+@@ -6,7 +6,9 @@
+ -- ctx.Bus.On("Evento", fn): ValveClosed, LeakStarted, LeakIgnited, LeakCleaned, PumpExploded, PumpRepaired,
+ --   FireStarted, FireOut, GeneratorOn, BreakerReset, PowerRestored, PumpsRebooted, Blackout,
+ --   Purchased, JerrycanBought, JerrycanFilled, CustomerServed, CustomerLeft, FuelLow, FuelEmpty, FuelPrice,
+---   LevelUp, ExtinguisherTaken, MissionComplete, MissionFailed
++--   LevelUp, ExtinguisherTaken, MissionComplete, MissionFailed, RewardEarned, PoliceAlert
++-- Recompensas: ctx.Util.Reward(player, valor, "motivo") (respeita Config.Economy; não paga com a economia desligada)
++-- Defeitos reais de equipamento: parte:SetAttribute("Defeito", "texto") / nil (Power, Pumps, Tools, Jukebox respeitam)
+ -- m:SetGoal(n)  m:Set(n)  m:Add(n)  m:Step("texto")  m:SetTarget(parte)  m:Contribute(player)  m:Complete()  m:Fail("motivo")
+ -- ctx.Util.Marker(parte, "TEXTO", cor)  /  ctx.Util.Unmark(parte)  /  ctx.Util.Bin()  (limpeza em lote)
+ return {
+diff -u src/GasStationArea__Posto__MissionDefs__blackout.lua src2/GasStationArea__Posto__MissionDefs__blackout.lua
+--- GasStationArea__Posto__MissionDefs__blackout.lua	2026-11-12 13:14:05.797555026 +0000
++++ GasStationArea__Posto__MissionDefs__blackout.lua	2026-11-12 13:24:02.335676087 +0000
+@@ -2,7 +2,11 @@
+ return {
+ 	Id = "blackout", Title = "Apagão na Tempestade", Weight = 3, Duration = 180, Reward = 300, XP = 30,
+ 	Description = "Um raio derrubou a energia do posto. Ligue o gerador, rearme o disjuntor e reinicie o terminal das bombas.",
+-	CanStart = function(ctx) return ctx.Systems.Power.Mode() == "on" end,
++	CanStart = function(ctx)
++		local O = ctx.Objects
++		return ctx.Systems.Power.Mode() == "on" and not ctx.Systems.Power.Tripped()
++			and O:FindFirstChild("Generator") ~= nil and O:FindFirstChild("BreakerPanel") ~= nil and O:FindFirstChild("PumpTerminal") ~= nil
++	end,
+ 	Start = function(ctx, m)
+ 		local Bus, Obj = ctx.Bus, ctx.Objects
+ 		m:SetGoal(3)
+diff -u src/GasStationArea__Posto__MissionDefs__fuel_leak.lua src2/GasStationArea__Posto__MissionDefs__fuel_leak.lua
+--- GasStationArea__Posto__MissionDefs__fuel_leak.lua	2026-11-12 13:14:05.797577675 +0000
++++ GasStationArea__Posto__MissionDefs__fuel_leak.lua	2026-11-12 13:24:02.335702756 +0000
+@@ -2,16 +2,26 @@
+ return {
+ 	Id = "fuel_leak", Title = "Vazamento na Bomba", Weight = 4, Duration = 160, Reward = 280, XP = 30,
+ 	Description = "Uma bomba está vazando combustível! Feche a válvula de emergência, limpe a poça e apague qualquer fogo antes que exploda.",
+-	CanStart = function(ctx) return ctx.Systems.Pumps.PickHealthy() ~= nil end,
++	-- só bombas saudáveis COM válvula de emergência associada (sem válvula a explosão seria inevitável)
++	CanStart = function(ctx)
++		for _, p in ipairs(ctx.Systems.Pumps.List()) do
++			if p.state == "ok" and p.valvePart and not p.anchor:GetAttribute("Defeito") then return true end
++		end
++		return false
++	end,
+ 	Start = function(ctx, m)
+ 		local Pumps, Fire, Bus = ctx.Systems.Pumps, ctx.Systems.Fire, ctx.Bus
+-		local i = Pumps.PickHealthy()
++		local okList = {}
++		for idx, p in ipairs(Pumps.List()) do
++			if p.state == "ok" and p.valvePart and not p.anchor:GetAttribute("Defeito") then table.insert(okList, idx) end
++		end
++		local i = ctx.Util.Pick(okList)
++		if not i or not Pumps.StartLeak(i) then error("nenhuma bomba disponível para o vazamento") end
+ 		m.pump = i
+ 		local tag = "pump" .. i
+ 		local valveDone, cleanDone = false, false
+ 		m:SetGoal(3)
+ 		m:Step("1) Feche a válvula de emergência (marcador vermelho)")
+-		Pumps.StartLeak(i)
+ 		local list = Pumps.List()
+ 		m:SetTarget(list[i] and list[i].valvePart)
+ 		ctx.Systems.Radio.Say("CONTROLE", "Vazamento na bomba " .. i .. "! Fechem a válvula de emergência AGORA.")
+diff -u src/GasStationArea__Posto__MissionDefs__inspection.lua src2/GasStationArea__Posto__MissionDefs__inspection.lua
+--- GasStationArea__Posto__MissionDefs__inspection.lua	2026-11-12 13:14:05.797599622 +0000
++++ GasStationArea__Posto__MissionDefs__inspection.lua	2026-11-12 13:24:02.335727986 +0000
+@@ -1,7 +1,29 @@
+--- Missão: inspeção de segurança. Vistorie 5 pontos; os que têm problema precisam ser corrigidos.
++-- Missão: inspeção de segurança. Defeitos REAIS são aplicados aos equipamentos (atributo "Defeito"):
++-- enquanto não forem corrigidos, o equipamento deixa de funcionar no seu sistema (bomba em manutenção,
++-- válvula emperrada, armário interditado, gerador/disjuntor/terminal/rádio sem operar).
++-- O jogador vistoria (G) para diagnosticar e corrige (R) o que estiver com defeito.
++local FAULTS = {
++	-- prefixo do nome do equipamento -> { defeito, sistema afetado }
++	{ "^BreakerPanel$", "fiação aquecida no disjuntor", "energia" },
++	{ "^Generator$", "óleo do gerador baixo", "energia" },
++	{ "^PumpTerminal$", "terminal das bombas travado", "energia" },
++	{ "^FireLocker", "lacre do extintor vencido", "incêndio" },
++	{ "^PumpAnchor_", "mangueira da bomba ressecada", "bombas" },
++	{ "^ShutoffValve_", "vedação da válvula com desgaste", "bombas" },
++	{ "^Jukebox$", "fiação do rádio solta", "loja" },
++	{ "^TankerPort$", "engate de descarga com desgaste", "caminhão-tanque" },
++}
++
++local function faultFor(part)
++	for _, f in ipairs(FAULTS) do
++		if part.Name:match(f[1]) then return f[2], f[3] end
++	end
++	return "desgaste geral", "posto"
++end
++
+ return {
+ 	Id = "inspection", Title = "Inspeção de Segurança", Weight = 3, Duration = 190, Reward = 240, XP = 25,
+-	Description = "O fiscal chegou! Vistorie os 5 pontos marcados (tecla G). Se houver problema, corrija (tecla R) antes de seguir.",
++	Description = "O fiscal chegou! Vistorie os pontos marcados (tecla G). Equipamentos com defeito ficam fora de operação até serem corrigidos (tecla R).",
+ 	CanStart = function(ctx) return ctx.Objects:FindFirstChild("BreakerPanel") ~= nil end,
+ 	Start = function(ctx, m)
+ 		local Util = ctx.Util
+@@ -14,53 +36,95 @@
+ 		}
+ 		local points = {}
+ 		for _, c in ipairs(candidates) do
+-			if c then table.insert(points, c) end
++			if c and c:IsA("BasePart") then table.insert(points, c) end
+ 		end
+ 		points = Util.Shuffle(points)
+ 		local n = math.min(5, #points)
++		if n == 0 then error("nenhum equipamento para vistoriar") end
+ 		m:SetGoal(n)
+ 		m:Step("Vistorie os pontos marcados (G)")
+ 		ctx.Systems.Radio.Say("CONTROLE", "Fiscal no posto! Vistoriem os equipamentos marcados.")
+-		local problems = {
+-			"lacre do extintor vencido", "fiação aquecida", "mangueira ressecada",
+-			"óleo do gerador baixo", "sinalização apagada", "vedação com desgaste",
+-		}
++
++		m.faulted = {}
+ 		m.marked = {}
++		local pending = {}
++
++		local function nextTarget()
++			for _, p in ipairs(points) do
++				if pending[p] then m:SetTarget(p) return end
++			end
++			m:SetTarget(nil)
++		end
++
++		local function clearFault(part)
++			part:SetAttribute("Defeito", nil)
++			local fx = m.faulted[part]
++			if fx then fx:Destroy() end
++			m.faulted[part] = nil
++		end
++
++		local function done(part)
++			pending[part] = nil
++			Util.Unmark(part)
++			m:Add(1)
++			nextTarget()
++		end
++
+ 		for k = 1, n do
+ 			local part = points[k]
++			pending[part] = true
+ 			table.insert(m.marked, part)
++			-- 40% dos pontos têm defeito real desde o início (como no original), agora com efeito no sistema
++			if math.random() < 0.4 and not part:GetAttribute("Defeito") then
++				local txt = faultFor(part)
++				part:SetAttribute("Defeito", txt)
++				local smoke = Instance.new("Smoke")
++				smoke.Name = "FumacaDefeito"
++				smoke.Color = Color3.fromRGB(80, 80, 80)
++				smoke.Opacity = 0.18
++				smoke.Size = 1.5
++				smoke.RiseVelocity = 2
++				smoke.Parent = part
++				m.faulted[part] = smoke
++			end
+ 			Util.Marker(part, "VISTORIAR", Color3.fromRGB(255, 190, 60))
+ 			local insp = Util.Prompt(part, "Inspecionar", "Ponto " .. k .. "/" .. n, 1.4, Enum.KeyCode.G, 10)
+ 			m.bin:Add(insp)
+ 			insp.Triggered:Connect(function(player)
++				if m.Ended or not insp.Parent then return end
+ 				m:Contribute(player)
+ 				insp:Destroy()
+-				if math.random() < 0.4 then
+-					local txt = Util.Pick(problems)
+-					ctx.Systems.Radio.Notify("warn", "Problema: " .. txt .. ". Corrija (R).", player)
++				local fault = part:GetAttribute("Defeito")
++				if fault then
++					local _, system = faultFor(part)
++					ctx.Systems.Radio.Notify("warn", "Diagnóstico: " .. fault .. " (" .. system .. " fora de operação). Corrija (R).", player)
+ 					Util.Marker(part, "CORRIGIR", Color3.fromRGB(255, 80, 60))
+-					local fix = Util.Prompt(part, "Corrigir", txt, 2, Enum.KeyCode.R, 10)
++					local fix = Util.Prompt(part, "Corrigir", fault, 2, Enum.KeyCode.R, 10)
+ 					m.bin:Add(fix)
+ 					fix.Triggered:Connect(function(pl)
++						if m.Ended or not fix.Parent then return end
+ 						fix:Destroy()
+ 						m:Contribute(pl)
+-						Util.Unmark(part)
+-						local r = Util.RewardFor(pl, ctx.Config.Rewards.Inspect)
+-						Util.Pay(pl, r)
+-						ctx.Systems.Radio.Popup(pl, "+" .. Util.Money(r))
+-						m:Add(1)
++						clearFault(part)
++						ctx.Systems.Radio.Notify("success", "Reparo concluído: " .. system .. " de volta à operação.", pl)
++						Util.Reward(pl, ctx.Config.Rewards.Inspect, "inspecao")
++						done(part)
+ 					end)
+ 				else
+-					Util.Unmark(part)
+ 					ctx.Systems.Radio.Notify("success", "Tudo certo neste ponto.", player)
+-					m:Add(1)
++					done(part)
+ 				end
+ 			end)
+ 		end
+-		m:SetTarget(points[1])
++		nextTarget()
+ 	end,
+ 	Cleanup = function(ctx, m)
+ 		for _, p in ipairs(m.marked or {}) do ctx.Util.Unmark(p) end
++		-- nenhum equipamento fica quebrado depois da missão (sucesso, falha ou cancelamento)
++		for part, fx in pairs(m.faulted or {}) do
++			part:SetAttribute("Defeito", nil)
++			if fx then fx:Destroy() end
++		end
+ 		if m.bin then m.bin:Destroy() end
+ 	end,
+ }
+diff -u src/GasStationArea__Posto__MissionDefs__robbery.lua src2/GasStationArea__Posto__MissionDefs__robbery.lua
+--- GasStationArea__Posto__MissionDefs__robbery.lua	2026-11-12 13:14:05.797626160 +0000
++++ GasStationArea__Posto__MissionDefs__robbery.lua	2026-11-12 13:24:02.335767515 +0000
+@@ -1,50 +1,73 @@
+ -- Missão: assalto ao posto. Acione o alarme silencioso, derrube e algeme o ladrão, recupere a sacola.
++-- Objetivos obrigatórios (4): alarme silencioso • algemar • pegar a sacola • devolver ao caixa.
++-- Polícia: não há sistema policial no posto; o alarme dispara Bus "PoliceAlert" (ponto de integração futuro).
+ return {
+ 	Id = "robbery", Title = "Assalto ao Posto", Weight = 2, Duration = 170, Reward = 450, XP = 45,
+ 	Description = "Um ladrão entrou na loja! Acione o alarme silencioso com o caixa, derrube o ladrão antes que escape, algeme-o e devolva a sacola.",
+ 	CanStart = function(ctx)
+ 		return ctx.Systems.Customers.Cashier() ~= nil and ctx.Systems.Shop.IsOpen()
+-			and ctx.Objects:FindFirstChild("StoreDoor_Out") ~= nil and ctx.Objects:FindFirstChild("Flee_1") ~= nil
++			and ctx.Objects:FindFirstChild("StoreDoor_Out") ~= nil and ctx.Objects:FindFirstChild("StoreDoor_In") ~= nil
++			and ctx.Objects:FindFirstChild("Flee_1") ~= nil
+ 	end,
+ 	Start = function(ctx, m)
+ 		local Util, Bus, Npc, Cfg = ctx.Util, ctx.Bus, ctx.Systems.Npc, ctx.Config.Robbery
+ 		m.bin = Util.Bin()
+-		local flags = { alerted = false, stunned = false, detained = false, bagTaken = false, escaped = false }
++		local flags = { alerted = false, stunned = false, detained = false, bagTaken = false, escaped = false, robbed = false }
++		local stolen = 0                      -- valor efetivamente tirado do caixa (é o que a sacola devolve)
+ 		local loot = math.random(Cfg.LootMin, Cfg.LootMax)
+ 		local function up(p) return p + Vector3.new(0, 3, 0) end
+ 		local function mk(name) return ctx.Objects:FindFirstChild(name) end
+ 
+-		m:SetGoal(3)
+-		m:Step("1) Acione o alarme silencioso com o caixa e derrube o ladrão")
+-		ctx.Systems.Customers.Suspend(true)
+-		ctx.Systems.Shop.SetOpen(false)
+-
++		-- cria o NPC ANTES de mexer na loja: falha de criação vira erro controlado (missão encerrada e limpa),
++		-- nunca vitória automática
+ 		local sp = Util.Pick({ mk("Spawn_Street_1") or mk("StoreDoor_Out"), mk("Spawn_Street_2") or mk("StoreDoor_Out") })
+ 		local robber = Npc.Create("Assaltante", CFrame.new(up(sp.Position)), {
+ 			shirt = Color3.fromRGB(35, 35, 40), pants = Color3.fromRGB(25, 25, 30), speed = 13,
+ 			role = "Assaltante", tagColor = Color3.fromRGB(255, 70, 60),
+ 		})
+-		if not robber then m:Complete() return end
++		if not robber then error("não foi possível criar o assaltante") end
+ 		m.bin:Add(robber)
+ 		m.robber = robber
+ 		local root = robber:FindFirstChild("HumanoidRootPart")
+ 		local hum = robber:FindFirstChildOfClass("Humanoid")
++
++		m:SetGoal(4)
++		m:Step("1) Acione o alarme silencioso com o caixa (Seu Zé) e derrube o ladrão")
++		ctx.Systems.Customers.Suspend(true)
++		ctx.Systems.Shop.SetOpen(false)
+ 		m:SetTarget(root)
+ 		Util.Marker(root, "ASSALTANTE", Color3.fromRGB(255, 70, 60))
+ 
+-		-- caixa: alarme silencioso
+ 		local cashier = ctx.Systems.Customers.Cashier()
+ 		local croot = cashier:FindFirstChild("HumanoidRootPart")
++
++		local function stepText()
++			if flags.bagTaken then
++				m:Step(flags.alerted and "Devolva a sacola ao caixa (Seu Zé)" or "Acione o alarme silencioso e devolva a sacola ao caixa")
++			elseif flags.detained then
++				m:Step(flags.alerted and "Pegue a sacola que ele largou" or "Pegue a sacola e acione o alarme silencioso com o caixa")
++			else
++				m:Step(flags.alerted and "Derrube e algeme o ladrão antes que ele escape" or "1) Acione o alarme silencioso com o caixa (Seu Zé) e derrube o ladrão")
++			end
++		end
++
++		-- caixa: alarme silencioso (objetivo obrigatório)
+ 		local alarmPP = Util.Prompt(croot, "Alarme silencioso", "Seu Zé", 0.8, Enum.KeyCode.G, 9)
+ 		m.bin:Add(alarmPP)
+ 		alarmPP.Triggered:Connect(function(player)
+-			if flags.alerted then return end
++			if flags.alerted or m.Ended then return end
+ 			flags.alerted = true
++			alarmPP.Enabled = false
+ 			m:Contribute(player)
+ 			ctx.Systems.Alarm.Set("robbery", true, true)
+-			ctx.Systems.Radio.Notify("info", "Alarme silencioso enviado. Polícia avisada!")
+-			Npc.Say(cashier, "Chamei a polícia!", 3)
+-			hum.WalkSpeed = Cfg.RobberSpeed
++			ctx.Systems.Radio.Notify("info", "Alarme silencioso enviado à central.")
++			Npc.Say(cashier, "Alarme acionado!", 3)
++			-- ponto de integração com a polícia do jogo (nenhuma polícia própria é criada aqui)
++			Bus.Fire("PoliceAlert", { kind = "robbery", position = croot.Position, suspect = robber, by = player })
++			-- reação do NPC: percebe o alarme e foge mais rápido
++			if hum and hum.Parent then hum.WalkSpeed = Cfg.RobberSpeed end
++			m:Add(1)
++			stepText()
+ 		end)
+ 
+ 		-- ações no ladrão
+@@ -54,7 +77,7 @@
+ 		m.bin:Add(tackle)
+ 		m.bin:Add(cuff)
+ 		tackle.Triggered:Connect(function(player)
+-			if flags.stunned or flags.detained or flags.escaped then return end
++			if flags.stunned or flags.detained or flags.escaped or m.Ended then return end
+ 			flags.stunned = true
+ 			m:Contribute(player)
+ 			Npc.Stun(robber, Cfg.StunSeconds)
+@@ -71,69 +94,111 @@
+ 			end)
+ 		end)
+ 
+-		local bag
+-		cuff.Triggered:Connect(function(player)
+-			if flags.detained or not flags.stunned then return end
+-			flags.detained = true
+-			m:Contribute(player)
+-			hum.PlatformStand = true
+-			Util.PlaySound(root, ctx.Config.Sounds.Cuff, { Volume = 0.8, Range = 60 })
+-			cuff.Enabled = false
+-			tackle.Enabled = false
+-			Util.Unmark(root)
+-			m:Add(1)
+-			m:Step("2) Pegue a sacola que ele largou")
+-			Npc.Say(robber, "Tá bom, tá bom! Me rendo!", 4)
+-			bag = ctx.Systems.Props.MoneyBag(root.Position + Vector3.new(2, 0.2, 2))
++		-- sacola: some se quem a carrega morrer/sair; volta para o chão para não travar a missão
++		local function dropBag(pos)
++			local bag = ctx.Systems.Props.MoneyBag(pos)
+ 			m.bin:Add(bag)
+ 			Util.Marker(bag, "SACOLA", Color3.fromRGB(255, 190, 60))
+ 			m:SetTarget(bag)
+-			local pp = Util.Prompt(bag, "Pegar sacola", ctx.Util.Money(loot), 0.4, nil, 10)
++			local pp = Util.Prompt(bag, "Pegar sacola", ctx.Util.Money(stolen), 0.4, nil, 10)
+ 			pp.Triggered:Connect(function(pl)
+-				if flags.bagTaken then return end
++				if flags.bagTaken or m.Ended then return end
++				local tool = ctx.Systems.Tools.Give(pl, "moneybag")
++				if not tool then return end
+ 				flags.bagTaken = true
+ 				m:Contribute(pl)
+-				ctx.Systems.Tools.Give(pl, "moneybag")
++				local lastPos = bag.Position
+ 				bag:Destroy()
+-				m:Add(1)
+-				m:Step("3) Devolva a sacola ao caixa (Seu Zé)")
++				if not m.BagCounted then
++					m.BagCounted = true
++					m:Add(1)
++				end
++				stepText()
+ 				m:SetTarget(croot)
+ 				Util.Marker(croot, "CAIXA", Color3.fromRGB(90, 255, 140))
++				-- recuperação: Tool destruída sem ter sido devolvida (morte, saída do jogador)
++				local conn
++				conn = tool.Destroying:Connect(function()
++					if conn then conn:Disconnect() end
++					if m.Ended or m.BagReturned then return end
++					flags.bagTaken = false
++					local r = pl.Character and pl.Character:FindFirstChild("HumanoidRootPart")
++					Util.Unmark(croot)
++					dropBag((r and r.Parent and r.Position or lastPos) + Vector3.new(0, 0.2, 0))
++					ctx.Systems.Radio.Notify("warn", "A sacola caiu! Recupere-a.")
++					stepText()
++				end)
++				m.bin:Add(conn)
+ 			end)
++		end
++
++		cuff.Triggered:Connect(function(player)
++			if flags.detained or not flags.stunned or m.Ended then return end
++			flags.detained = true
++			m:Contribute(player)
++			hum.PlatformStand = true
++			Util.PlaySound(root, ctx.Config.Sounds.Cuff, { Volume = 0.8, Range = 60 })
++			cuff.Enabled = false
++			tackle.Enabled = false
++			Util.Unmark(root)
++			m:Add(1)
++			Npc.Say(robber, "Tá bom, tá bom! Me rendo!", 4)
++			if flags.alerted then
++				Bus.Fire("PoliceAlert", { kind = "robbery_detained", position = root.Position, suspect = robber, by = player })
++			end
++			dropBag(root.Position + Vector3.new(2, 0.2, 2))
++			stepText()
+ 		end)
+ 
+ 		local returnPP = Util.Prompt(croot, "Devolver sacola", "Seu Zé", 0.5, Enum.KeyCode.F, 9)
+ 		m.bin:Add(returnPP)
+ 		returnPP.Triggered:Connect(function(player)
+-			if not flags.bagTaken then return end
+-			if not ctx.Systems.Tools.Remove(player, "moneybag") then
++			if not flags.bagTaken or m.Ended or m.BagReturned then return end
++			if not ctx.Systems.Tools.Find(player, "moneybag") then
+ 				ctx.Systems.Radio.Notify("warn", "Você não está com a sacola.", player)
+ 				return
+ 			end
+-			ctx.State.Add("Cash", loot)
++			m.BagReturned = true
++			ctx.Systems.Tools.Remove(player, "moneybag")
++			ctx.State.Add("Cash", stolen)   -- devolve exatamente o que foi roubado
+ 			m:Contribute(player)
+ 			Util.Unmark(croot)
++			Util.PlaySound(croot, ctx.Config.Sounds.Register, { Volume = 0.6, Range = 50 })
+ 			Npc.Say(cashier, "Você salvou o meu dia!", 4)
+ 			m:Add(1)
++			if not flags.alerted then
++				ctx.Systems.Radio.Notify("warn", "Falta acionar o alarme silencioso com o caixa para registrar a ocorrência.", player)
++				stepText()
++			end
++		end)
++
++		-- morte do ladrão (queda, explosão): encerramento controlado
++		hum.Died:Connect(function()
++			if not flags.detained and not m.Ended then m:Fail("o assaltante não pôde ser detido") end
+ 		end)
+ 
+ 		-- roteiro do ladrão
+ 		task.spawn(function()
+ 			local door_out, door_in, slot = mk("StoreDoor_Out"), mk("StoreDoor_In"), mk("QueueSlot_1")
+ 			Npc.WalkTo(robber, up(door_out.Position), 40)
++			if flags.detained or m.Ended then return end
+ 			Npc.WalkTo(robber, up(door_in.Position), 15)
++			if flags.detained or m.Ended then return end
+ 			if slot then Npc.WalkTo(robber, up(slot.Position), 20) end
+-			if m.Ended then return end
++			-- detido antes de chegar ao caixa: não rouba nada
++			if flags.detained or m.Ended then return end
+ 			Npc.Face(robber, croot.Position)
++			Util.PlaySound(croot, ctx.Config.Sounds.RobberyStart, { Volume = 0.8, Range = 80 })
+ 			ctx.Systems.Radio.Say("CONTROLE", "ASSALTO no posto! O ladrão está no caixa. Usem o alarme silencioso com o Seu Zé!")
+ 			ctx.Systems.Radio.Notify("danger", "ASSALTO EM ANDAMENTO!")
+ 			Npc.Say(robber, "Passa o dinheiro! Rápido!", 4)
+ 			Npc.Say(cashier, "Calma, calma! Pode levar!", 4)
+ 			local t0 = os.clock()
+-			while not flags.alerted and os.clock() - t0 < 12 and not m.Ended do task.wait(0.3) end
+-			if m.Ended then return end
+-			local taken = math.min(loot, ctx.State.Get("Cash") or 0)
+-			ctx.State.Add("Cash", -taken)
++			while not flags.alerted and not flags.detained and os.clock() - t0 < (Cfg.WaitForAlarm or 12) and not m.Ended do task.wait(0.3) end
++			if flags.detained or m.Ended then return end
++			stolen = math.min(loot, ctx.State.Get("Cash") or 0)
++			ctx.State.Add("Cash", -stolen)
++			flags.robbed = true
+ 			hum.WalkSpeed = Cfg.RobberSpeed
+ 			Npc.Say(robber, "Valeu, otário!", 3)
+ 			-- fuga
+diff -u src/GasStationArea__Posto__MissionDefs__rush.lua src2/GasStationArea__Posto__MissionDefs__rush.lua
+--- GasStationArea__Posto__MissionDefs__rush.lua	2026-11-12 13:14:05.797656496 +0000
++++ GasStationArea__Posto__MissionDefs__rush.lua	2026-11-12 13:24:02.335807800 +0000
+@@ -10,6 +10,7 @@
+ 		local Customers, Shop = ctx.Systems.Customers, ctx.Systems.Shop
+ 		local need = 6
+ 		local served, angry, spawned = 0, 0, 0
++		m.customers = {}
+ 		m:SetGoal(need)
+ 		m:Step("Atenda os clientes: pegue as bebidas pedidas e entregue")
+ 		Shop.SetServeMode(true)
+@@ -29,28 +30,38 @@
+ 
+ 		task.spawn(function()
+ 			while not m.Ended and spawned < 10 and served < need do
+-				local open = 0
+-				for _ in pairs({}) do open += 1 end
+ 				local obj = Customers.Spawn({
+ 					order = newOrder(),
+ 					patience = 55,
+ 					onServed = function(plr)
++						if m.Ended then return end
+ 						m:Contribute(plr)
+ 						served += 1
+ 						m:Add(1)
+ 					end,
+-					onLeft = function()
++					onLeft = function(reason)
++						if m.Ended then return end
++						if reason == "nav" then
++							-- não chegou à fila (navegação): não conta como irritado e libera outra vaga
++							spawned = math.max(0, spawned - 1)
++							return
++						end
+ 						angry += 1
+ 						ctx.Systems.Radio.Notify("warn", "Cliente irritado foi embora (" .. angry .. "/3)")
+ 						if angry >= 3 then m:Fail("clientes demais irritados") end
+ 					end,
+ 				})
+-				if obj then spawned += 1 end
++				if obj then
++					spawned += 1
++					table.insert(m.customers, obj)
++				end
+ 				task.wait(obj and (9 + math.random() * 5) or 3)
+ 			end
+ 		end)
+ 	end,
+ 	Cleanup = function(ctx, m)
++		-- clientes da missão vão embora sem contar como irritados
++		for _, obj in ipairs(m.customers or {}) do ctx.Systems.Customers.Dismiss(obj) end
+ 		ctx.Systems.Shop.SetServeMode(false)
+ 		ctx.Systems.Customers.Suspend(false)
+ 	end,
+diff -u src/GasStationArea__Posto__MissionDefs__stock.lua src2/GasStationArea__Posto__MissionDefs__stock.lua
+--- GasStationArea__Posto__MissionDefs__stock.lua	2026-11-12 13:14:05.797678228 +0000
++++ GasStationArea__Posto__MissionDefs__stock.lua	2026-11-12 13:24:02.335869039 +0000
+@@ -2,11 +2,20 @@
+ return {
+ 	Id = "stock", Title = "Reposição de Estoque", Weight = 3, Duration = 210, Reward = 240, XP = 25,
+ 	Description = "As prateleiras esvaziaram! Pegue as caixas na calçada sul e leve até as prateleiras marcadas dentro da loja.",
+-	CanStart = function(ctx) return ctx.Systems.Shop.IsOpen() end,
++	CanStart = function(ctx)
++		if not ctx.Systems.Shop.IsOpen() or #ctx.Systems.Shop.Slots() == 0 then return false end
++		local box, shelf = false, false
++		for _, o in ipairs(ctx.Objects:GetChildren()) do
++			if o:IsA("BasePart") then
++				if o.Name:match("^BoxSpawn_") then box = true end
++				if o.Name:match("^ShelfDrop_") then shelf = true end
++			end
++		end
++		return box and shelf
++	end,
+ 	Start = function(ctx, m)
+ 		local Util, Bus = ctx.Util, ctx.Bus
+ 		m.bin = Util.Bin()
+-		ctx.Systems.Shop.Deplete(8)
+ 		local spawns, drops = {}, {}
+ 		for _, o in ipairs(ctx.Objects:GetChildren()) do
+ 			if o:IsA("BasePart") then
+@@ -16,29 +25,43 @@
+ 		end
+ 		table.sort(spawns, function(a, b) return a.Name < b.Name end)
+ 		local n = math.min(5, #spawns)
+-		if n == 0 or #drops == 0 then m:Complete() return end
++		-- sem caixas/prateleiras a missão não pode ser cumprida: erro controlado em vez de vitória automática
++		if n == 0 or #drops == 0 then error("sem pontos de caixa ou prateleira") end
++		ctx.Systems.Shop.Deplete(8)
+ 		m:SetGoal(n)
+ 		m:Step("1) Pegue uma caixa na calçada sul da loja")
+ 		ctx.Systems.Radio.Say("CONTROLE", "Estoque zerado! Caixas na calçada sul. Levem para as prateleiras.")
+ 		m:SetTarget(spawns[1])
+ 
+-		for k = 1, n do
++		local function spawnCrate(k)
+ 			local crate = ctx.Systems.Props.Crate(spawns[k].CFrame * CFrame.new(0, 1.3, 0))
+ 			m.bin:Add(crate)
+ 			Util.Marker(crate, "CAIXA", Color3.fromRGB(255, 190, 60))
+ 			local pp = Util.Prompt(crate, "Pegar caixa", "Estoque", 0.5)
+ 			pp.Triggered:Connect(function(player)
++				if m.Ended or not crate.Parent then return end
+ 				if ctx.Systems.Tools.Find(player, "crate") then
+ 					ctx.Systems.Radio.Notify("warn", "Você já está carregando uma caixa.", player)
+ 					return
+ 				end
+-				ctx.Systems.Tools.Give(player, "crate")
++				local tool = ctx.Systems.Tools.Give(player, "crate")
++				if not tool then return end
+ 				m:Contribute(player)
+ 				crate:Destroy()
++				-- recuperação: caixa perdida (morte/saída do jogador) volta para a calçada
++				local conn
++				conn = tool.Destroying:Connect(function()
++					if conn then conn:Disconnect() end
++					if m.Ended or tool:GetAttribute("Entregue") then return end
++					spawnCrate(k)
++					ctx.Systems.Radio.Notify("warn", "Uma caixa foi perdida e voltou para a calçada.")
++				end)
++				m.bin:Add(conn)
+ 				m:Step("2) Equipe a caixa e leve até as prateleiras (marcadores)")
+ 				ctx.Systems.Radio.Notify("info", "Caixa na mão. Equipe e vá até uma prateleira.", player)
+ 			end)
+ 		end
++		for k = 1, n do spawnCrate(k) end
+ 		for _, d in ipairs(drops) do
+ 			Util.Marker(d, "REPOR", Color3.fromRGB(90, 255, 140))
+ 			local pp = Util.Prompt(d, "Repor prateleira", "Estoque", 0.7, nil, 10)
+@@ -48,12 +71,12 @@
+ 					ctx.Systems.Radio.Notify("warn", "Pegue uma caixa na calçada primeiro.", player)
+ 					return
+ 				end
+-				ctx.Systems.Tools.Remove(player, "crate")
++				local tool = ctx.Systems.Tools.Find(player, "crate")
++				tool:SetAttribute("Entregue", true)
++				tool:Destroy()
+ 				ctx.Systems.Shop.Restock(2)
+ 				m:Contribute(player)
+-				local r = Util.RewardFor(player, ctx.Config.Rewards.Box)
+-				Util.Pay(player, r)
+-				ctx.Systems.Radio.Popup(player, "+" .. Util.Money(r))
++				Util.Reward(player, ctx.Config.Rewards.Box, "estoque")
+ 				m:Add(1)
+ 			end)
+ 		end
+@@ -61,6 +84,10 @@
+ 	end,
+ 	Cleanup = function(ctx, m)
+ 		if m.bin then m.bin:Destroy() end
++		-- caixas ainda carregadas não ficam com os jogadores (nem a lentidão da Tool pesada)
++		for _, p in ipairs(game:GetService("Players"):GetPlayers()) do
++			while ctx.Systems.Tools.Remove(p, "crate") do end
++		end
+ 		for _, d in ipairs(m.drops or {}) do ctx.Util.Unmark(d) end
+ 		ctx.Systems.Shop.Restock(4)
+ 	end,
+diff -u src/GasStationArea__Posto__MissionDefs__stranded.lua src2/GasStationArea__Posto__MissionDefs__stranded.lua
+--- GasStationArea__Posto__MissionDefs__stranded.lua	2026-11-12 13:14:05.797701194 +0000
++++ GasStationArea__Posto__MissionDefs__stranded.lua	2026-11-12 13:24:02.335904100 +0000
+@@ -17,6 +17,7 @@
+ 
+ 		local carCF = CFrame.new(spot.Position + Vector3.new(0, -spot.Size.Y / 2, 0)) * CFrame.Angles(0, spot.Orientation.Y * math.pi / 180, 0)
+ 		local car, lights = ctx.Systems.Props.Car(carCF, Color3.fromRGB(60, 120, 210))
++		if not car or not car.PrimaryPart then error("não foi possível criar o carro") end
+ 		m.car = car
+ 		m.bin:Add(car)
+ 		local body = car.PrimaryPart
+@@ -58,7 +59,7 @@
+ 
+ 		m:Connect(Bus.On("JerrycanFilled", function(plr, liters, can)
+ 			m:Contribute(plr)
+-			if not filled and (can:GetAttribute("Liters") or 0) >= need then
++			if not filled and can and (can:GetAttribute("Liters") or 0) >= need then
+ 				filled = true
+ 				m:Add(1)
+ 				m:Step("2) Leve o galão até o carro (marcador)")
+@@ -82,10 +83,10 @@
+ 			if not filled then m:Add(1) filled = true end
+ 			Util.Unmark(body)
+ 			if driver then ctx.Systems.Npc.Say(driver, "Você é demais! Toma uma gorjeta!", 4) end
+-			local tip = Util.RewardFor(player, math.random(30, 70))
+-			Util.Pay(player, tip)
+-			ctx.Systems.Radio.Popup(player, "+" .. Util.Money(tip))
+-			-- o carro vai embora
++			Util.Reward(player, math.random(30, 70), "gorjeta")
++			-- o carro vai embora (a limpeza espera o carro sair de cena)
++			m.departing = true
++			Util.PlaySound(body, ctx.Config.Sounds.CarStart, { Volume = 0.8, Range = 120 })
+ 			task.spawn(function()
+ 				local away = ctx.Objects:FindFirstChild("StrandedExit")
+ 				local target = carCF * CFrame.new(0, 0, -90)
+@@ -97,7 +98,7 @@
+ 	end,
+ 	Cleanup = function(ctx, m)
+ 		if m.bin then
+-			task.delay(1, function() m.bin:Destroy() end)
++			task.delay(m.departing and 7 or 1, function() m.bin:Destroy() end)
+ 		end
+ 	end,
+ }
+diff -u src/GasStationArea__Posto__MissionDefs__tanker.lua src2/GasStationArea__Posto__MissionDefs__tanker.lua
+--- GasStationArea__Posto__MissionDefs__tanker.lua	2026-11-12 13:14:05.797733005 +0000
++++ GasStationArea__Posto__MissionDefs__tanker.lua	2026-11-12 13:24:02.335936673 +0000
+@@ -17,8 +17,10 @@
+ 		ctx.Systems.Radio.Say("CONTROLE", "Caminhão-tanque na entrada! Preparem a descarga.")
+ 		local startP, park, endP = O.Tanker_Start.Position, O.Tanker_Park.Position, O.Tanker_End.Position
+ 		local truck, port = ctx.Systems.Props.Truck(CFrame.lookAt(startP, park))
++		if not truck or not port or not truck:FindFirstChild("Cab") then error("não foi possível criar o caminhão") end
+ 		m.truck = truck
+ 		m.bin:Add(truck)
++		local surgeId = 0   -- identifica o surto atual: um temporizador antigo nunca afeta um surto novo
+ 		local portGround = O.TankerPort
+ 		local reg = O.TankerRegulator
+ 		local state = { auth = false, hose = false, flowing = false, done = false, surge = false, failures = 0 }
+@@ -65,7 +67,7 @@
+ 			m:Step("3) Abra a válvula de descarga no chão")
+ 		end)
+ 		regPP.Triggered:Connect(function(pl)
+-			if state.surge then
++			if state.surge and not m.Ended then
+ 				state.surge = false
+ 				m:Contribute(pl)
+ 				ctx.Systems.Alarm.Set("tanker", false)
+@@ -93,13 +95,14 @@
+ 						if nextSurge <= 0 and elapsed < Cfg.TransferSeconds - 3 then
+ 							nextSurge = math.random(Cfg.SurgeEvery[1], Cfg.SurgeEvery[2])
+ 							state.surge = true
++							surgeId += 1
++							local myId = surgeId
+ 							regPP.Enabled = true
+ 							ctx.Systems.Alarm.Set("tanker", true, false)
+ 							ctx.Systems.Radio.Notify("danger", "SURTO DE PRESSÃO! Aperte o regulador!")
+ 							ctx.Systems.Radio.Say("CONTROLE", "Pressão subindo no mangote! Regulador, rápido!")
+-							local my = elapsed
+ 							task.delay(Cfg.SurgeWindow, function()
+-								if state.surge and not m.Ended then
++								if state.surge and surgeId == myId and not m.Ended and not state.done then
+ 									state.surge = false
+ 									ctx.Systems.Alarm.Set("tanker", false)
+ 									state.failures += 1
+@@ -113,6 +116,8 @@
+ 					end
+ 				end
+ 				regPP.Enabled = false
++				state.surge = false
++				ctx.Systems.Alarm.Set("tanker", false)
+ 				if m.Ended then return end
+ 				state.done = true
+ 				m:Set(3)
+@@ -122,19 +127,26 @@
+ 			end)
+ 		end)
+ 		outPP.Triggered:Connect(function(pl)
+-			if not state.done then return end
++			if not state.done or state.finished then return end
++			state.finished = true
+ 			outPP.Enabled = false
+ 			m:Contribute(pl)
+ 			mark(nil)
++			-- conclui ao finalizar (o tempo não pode mais estourar durante a saída); a limpeza espera o caminhão sair
++			m.departing = true
++			m:Add(1)
+ 			task.spawn(function()
++				local snd = Util.PlaySound(truck.PrimaryPart or cab, ctx.Config.Sounds.Truck, { Looped = true, Volume = 0.8, Range = 160 })
+ 				ctx.Systems.Props.Move(truck, CFrame.lookAt(endP, endP + (endP - park)), 7, Enum.EasingStyle.Quad)
+-				m:Add(1)
++				if snd then snd:Destroy() end
+ 			end)
+ 		end)
+ 
+ 		-- chegada
+ 		task.spawn(function()
++			local snd = Util.PlaySound(truck.PrimaryPart or cab, ctx.Config.Sounds.Truck, { Looped = true, Volume = 0.8, Range = 160 })
+ 			ctx.Systems.Props.Move(truck, CFrame.lookAt(park, park + (park - startP)), 8, Enum.EasingStyle.Sine)
++			if snd then snd:Destroy() end
+ 			if m.Ended then return end
+ 			authPP.Enabled = true
+ 			mark(cab, "MOTORISTA")
+@@ -148,7 +160,7 @@
+ 		ctx.Systems.Alarm.Set("tanker", false)
+ 		ctx.Systems.Fire.ExtinguishAll("tanker")
+ 		if m.bin then
+-			task.delay(2, function() m.bin:Destroy() end)
++			task.delay(m.departing and 8 or 2, function() m.bin:Destroy() end)
+ 		end
+ 	end,
+ }
+diff -u src/GasStationArea__Posto__Modules__Config.lua src2/GasStationArea__Posto__Modules__Config.lua
+--- GasStationArea__Posto__Modules__Config.lua	2026-11-12 13:14:05.795893589 +0000
++++ GasStationArea__Posto__Modules__Config.lua	2026-11-12 13:24:02.334915573 +0000
+@@ -11,9 +11,21 @@
+ }
+ 
+ -- ===== Economia =====
++-- O jogo ainda NÃO tem economia global. Enquanto Enabled = false:
++--   • nenhum saldo de jogador é criado, lido ou alterado (o posto não cria leaderstats);
++--   • recompensas só são anunciadas no Bus como "RewardEarned"(player, valor, motivo);
++--   • compras seguem PurchasesWhenDisabled ("free" = entrega o item sem cobrar; "blocked" = recusa a compra).
++-- Integração futura: Util.SetEconomyProvider({ Pay = fn(p, v, motivo) -> pago, Charge = fn(p, v, motivo) -> ok, Balance = fn(p) -> n })
++-- ou Provider = "leaderstats" (usa leaderstats[Stat] SOMENTE se já existir; nunca cria).
++-- O "caixa do posto" (RegisterStart / estado Cash) é dinheiro do cenário (assalto, vendas), não saldo de jogador.
+ Config.Economy = {
++	Enabled = false,
++	Provider = "custom",   -- "custom" | "leaderstats"
+ 	Stat = "Dinheiro",     -- nome do valor em leaderstats (mesmo da Oil Rig)
+ 	RegisterStart = 500,   -- dinheiro inicial do caixa do posto
++	PurchasesWhenDisabled = "free",
++	-- divisão do prêmio da missão: "full" (cada colaborador recebe o integral, regra original) | "split" | "none"
++	MissionPayout = "full",
+ }
+ 
+ -- ===== Combustível =====
+@@ -138,11 +150,14 @@
+ }
+ 
+ -- ===== Assalto =====
++-- Integração com polícia: o posto NÃO tem polícia própria. O alarme silencioso dispara Bus "PoliceAlert"(info);
++-- um sistema policial do jogo pode escutar com require(Posto.Modules.Bus).On("PoliceAlert", fn).
+ Config.Robbery = {
+ 	LootMin = 180, LootMax = 360,
+ 	RobberSpeed = 15,
+ 	StunSeconds = 7,
+ 	CuffHold = 2,
++	WaitForAlarm = 12,     -- segundos que o ladrão espera no caixa antes de fugir
+ }
+ 
+ -- ===== Jukebox / Rádio da loja (cole IDs "rbxassetid://123") =====
+@@ -158,11 +173,40 @@
+ -- ===== HUD =====
+ Config.Hud = { ExtraRadius = 120 }
+ 
+--- ===== Sons (cole IDs como "rbxassetid://123"). Vazio = sem som =====
++-- ===== Sons =====
++-- Cole IDs autorizados como "rbxassetid://123" (ou só o número). Vazio = sem som.
++-- Nenhuma mecânica depende de áudio: ID ausente/inválido nunca bloqueia nada.
++-- (As estações do rádio da loja ficam em Config.Jukebox.)
+ Config.Sounds = {
+-	Alarm = "", Explosion = "", Valve = "", Generator = "", Blackout = "", Thunder = "",
+-	Complete = "", Fail = "", Extinguisher = "", Radio = "", Purchase = "", Chime = "",
+-	Siren = "", Fuel = "", Spark = "", Truck = "", Tackle = "", Cuff = "", Gift = "", Drink = "",
++	-- bombas e abastecimento
++	Fuel = "",            -- bomba enchendo galão / vazamento
++	PumpBeep = "",        -- bomba aceita o abastecimento
++	Valve = "",           -- válvula de emergência
++	-- alarmes
++	Alarm = "",           -- sirene geral do posto (loop)
++	Siren = "",           -- reservado: sirene policial (integração futura)
++	-- incêndios
++	FireLoop = "",        -- loop em cada foco
++	Extinguisher = "", Explosion = "",
++	-- energia
++	Generator = "",       -- partida do gerador
++	GeneratorLoop = "",   -- gerador funcionando (loop)
++	Breaker = "",         -- disjuntor rearmado
++	Spark = "", Blackout = "", Thunder = "",
++	-- caixa e loja
++	Register = "",        -- caixa registradora
++	Purchase = "", Chime = "", Drink = "", Gift = "",
++	-- clientes e NPCs
++	CustomerServed = "", CustomerAngry = "",
++	-- assalto
++	RobberyStart = "", Tackle = "", Cuff = "",
++	-- veículos
++	Truck = "",           -- caminhão-tanque em movimento
++	CarStart = "",        -- carro do motorista partindo
++	-- rádio e alertas
++	Radio = "", Alert = "",
++	-- missões
++	MissionStart = "", Complete = "", Fail = "",
+ }
+ 
+ -- ===== Dicas aleatórias que o CONTROLE solta no rádio =====
+diff -u src/GasStationArea__Posto__Modules__Missions.lua src2/GasStationArea__Posto__Modules__Missions.lua
+--- GasStationArea__Posto__Modules__Missions.lua	2026-11-12 13:14:05.795953678 +0000
++++ GasStationArea__Posto__Modules__Missions.lua	2026-11-12 13:24:02.334976467 +0000
+@@ -38,15 +38,21 @@
+ 			local left = self.EndsAt - workspace:GetServerTimeNow()
+ 			if left > self.Def.Duration * 0.5 then reward = math.floor(reward * 1.25) end
+ 		end
++		-- política de divisão configurável (Config.Economy.MissionPayout); XP de reputação vale para todos
++		local present = {}
+ 		for p in pairs(self.Contributors) do
+-			if p.Parent then
+-				local r = ctx.Util.RewardFor(p, reward)
+-				ctx.Util.Pay(p, r)
+-				ctx.Systems.Radio.Popup(p, "+" .. ctx.Util.Money(r))
+-				if ctx.Systems.Reputation then ctx.Systems.Reputation.AddXP(p, self.Def.XP or 25, "missão") end
+-			end
++			if p.Parent then table.insert(present, p) end
++		end
++		local policy = ctx.Config.Economy.MissionPayout or "full"
++		local each = reward
++		if policy == "split" then each = #present > 0 and math.floor(reward / #present) or 0
++		elseif policy == "none" then each = 0 end
++		local paid = 0
++		for _, p in ipairs(present) do
++			paid = math.max(paid, ctx.Util.Reward(p, each, "missao:" .. self.Def.Id))
++			if ctx.Systems.Reputation then ctx.Systems.Reputation.AddXP(p, self.Def.XP or 25, "missão") end
+ 		end
+-		ctx.Systems.Radio.Notify("success", "MISSÃO CUMPRIDA: " .. self.Def.Title .. " (+" .. ctx.Util.Money(reward) .. ")")
++		ctx.Systems.Radio.Notify("success", "MISSÃO CUMPRIDA: " .. self.Def.Title .. (paid > 0 and (" (+" .. ctx.Util.Money(paid) .. ")") or ""))
+ 		ctx.Systems.Radio.Say("CONTROLE", "Excelente trabalho, equipe. Situação sob controle.")
+ 		ctx.Util.PlaySound(workspace, ctx.Config.Sounds.Complete, { Volume = 0.6 })
+ 		ctx.Bus.Fire("MissionComplete", self.Def.Id)
+@@ -72,11 +78,19 @@
+ function Missions.Active() return active end
+ function Missions.Target() return active and active.Target or nil end
+ 
++-- CanStart protegido: erro numa definição não derruba o diretor nem o quadro
++local function eligible(def)
++	if not def.CanStart then return true end
++	local ok, res = pcall(def.CanStart, ctx)
++	if not ok then warn("[Posto] erro em CanStart de " .. tostring(def.Id) .. ": " .. tostring(res)) end
++	return ok and res and true or false
++end
++
+ function Missions.Start(id)
+ 	if active then return false end
+ 	local def = defs[id]
+ 	if not def then return false end
+-	if def.CanStart and not def.CanStart(ctx) then return false end
++	if not eligible(def) then return false end
+ 	seq += 1
+ 	local m = setmetatable({
+ 		Def = def, Progress = 0, Goal = 1, Contributors = {}, Ended = false, _conns = {}, _seq = seq,
+@@ -93,6 +107,7 @@
+ 	ctx.State.Set("MissionGoal", 1)
+ 	ctx.State.Set("MissionEndsAt", m.EndsAt)
+ 	ctx.Systems.Radio.Notify("warn", "NOVA MISSÃO: " .. def.Title)
++	ctx.Util.PlaySound(workspace, ctx.Config.Sounds.MissionStart, { Volume = 0.6 })
+ 	local ok, err = pcall(def.Start, ctx, m)
+ 	if not ok then
+ 		warn("[Posto] erro ao iniciar missão " .. id .. ": " .. tostring(err))
+@@ -113,7 +128,7 @@
+ local function pick()
+ 	local pool, total = {}, 0
+ 	for id, def in pairs(defs) do
+-		if id ~= lastId and (not def.CanStart or def.CanStart(ctx)) then
++		if id ~= lastId and eligible(def) then
+ 			local w = def.Weight or 1
+ 			table.insert(pool, { id, w })
+ 			total += w
+diff -u src/GasStationArea__Posto__Modules__Systems__Customers.lua src2/GasStationArea__Posto__Modules__Systems__Customers.lua
+--- GasStationArea__Posto__Modules__Systems__Customers.lua	2026-11-12 13:14:05.796564293 +0000
++++ GasStationArea__Posto__Modules__Systems__Customers.lua	2026-11-12 13:24:02.335161938 +0000
+@@ -114,11 +114,12 @@
+ 			end
+ 		end
+ 		ok = ok and Npc.WalkTo(model, up(slotPart.Position), 25)
+-		if not ok or not model.Parent then
++		if not ok or not model.Parent or obj.cancel then
+ 			slotUsed[slotIdx] = nil
+ 			active[obj] = nil
+ 			Npc.Remove(model)
+-			if opts.onLeft then pcall(opts.onLeft) end
++			-- "nav": não chegou à fila (pathfinding); não é culpa do jogador
++			if opts.onLeft and not obj.cancel then pcall(opts.onLeft, "nav") end
+ 			return
+ 		end
+ 		local cs = marker("CashierSpot")
+@@ -139,7 +140,7 @@
+ 			served, servedBy = true, player
+ 		end)
+ 		local t0 = os.clock()
+-		while not served and os.clock() - t0 < patience and model.Parent do
++		while not served and not obj.cancel and os.clock() - t0 < patience and model.Parent do
+ 			local k = 1 - (os.clock() - t0) / patience
+ 			fill.Size = UDim2.fromScale(math.clamp(k, 0, 1), 1)
+ 			fill.BackgroundColor3 = k > 0.5 and C(90, 255, 140) or (k > 0.25 and C(255, 200, 50) or C(255, 70, 60))
+@@ -148,22 +149,27 @@
+ 		obj.done = true
+ 		pp:Destroy()
+ 		slotUsed[slotIdx] = nil
++		if obj.cancel and not served then
++			-- dispensado pela missão (encerrada): sai sem contar como cliente irritado
++			active[obj] = nil
++			exitAndRemove(model, true)
++			return
++		end
+ 		if served then
+ 			local pays = opts.pays or math.random(cfg.Pays[1], cfg.Pays[2])
+ 			ctx.State.Add("Cash", pays)
+ 			local tip = math.random(cfg.Tip[1], cfg.Tip[2])
+-			local reward = ctx.Util.RewardFor(servedBy, order and ctx.Config.Rewards.Serve + tip or tip)
+-			ctx.Util.Pay(servedBy, reward)
+-			ctx.Systems.Radio.Popup(servedBy, "+" .. ctx.Util.Money(reward))
++			ctx.Util.Reward(servedBy, order and ctx.Config.Rewards.Serve + tip or tip, "atendimento")
+ 			if ctx.Systems.Reputation then ctx.Systems.Reputation.AddXP(servedBy, order and 5 or 3, "atendimento") end
+ 			Npc.Say(model, "Valeu! Bom trabalho!", 3)
+-			ctx.Util.PlaySound(root, ctx.Config.Sounds.Purchase, { Volume = 0.5, Range = 50 })
++			ctx.Util.PlaySound(root, ctx.Config.Sounds.CustomerServed, { Volume = 0.5, Range = 50 })
+ 			ctx.Bus.Fire("CustomerServed", servedBy)
+ 			if opts.onServed then pcall(opts.onServed, servedBy) end
+ 		else
+ 			Npc.Say(model, "Demora demais! Vou embora.", 3)
++			ctx.Util.PlaySound(root, ctx.Config.Sounds.CustomerAngry, { Volume = 0.5, Range = 50 })
+ 			ctx.Bus.Fire("CustomerLeft")
+-			if opts.onLeft then pcall(opts.onLeft) end
++			if opts.onLeft then pcall(opts.onLeft, "patience") end
+ 		end
+ 		active[obj] = nil
+ 		exitAndRemove(model, true)
+@@ -199,6 +205,8 @@
+ end
+ 
+ function Customers.Cashier() return cashier end
++-- dispensa um cliente criado por Customers.Spawn (sem callbacks); usado na limpeza das missões
++function Customers.Dismiss(obj) if obj then obj.cancel = true end end
+ function Customers.Suspend(v) suspended = v end
+ 
+ function Customers.Count()
+diff -u src/GasStationArea__Posto__Modules__Systems__Fire.lua src2/GasStationArea__Posto__Modules__Systems__Fire.lua
+--- GasStationArea__Posto__Modules__Systems__Fire.lua	2026-11-12 13:14:05.796613137 +0000
++++ GasStationArea__Posto__Modules__Systems__Fire.lua	2026-11-12 13:24:02.335203099 +0000
+@@ -75,8 +75,9 @@
+ 	light.Brightness = 2
+ 	light.Shadows = false
+ 	light.Parent = part
++	local snd = ctx.Util.PlaySound(part, ctx.Config.Sounds.FireLoop, { Looped = true, Volume = 0.5, Range = 70 })
+ 	fires[id] = {
+-		id = id, part = part, fire = fire, smoke = smoke, light = light,
++		id = id, part = part, fire = fire, smoke = smoke, light = light, sound = snd,
+ 		hp = cfg.HP, max = cfg.HP, born = os.clock(), tag = opts.tag, spread = opts.spread ~= false,
+ 	}
+ 	ctx.Bus.Fire("FireStarted", id, opts.tag)
+@@ -89,11 +90,10 @@
+ 	fires[id] = nil
+ 	local tag = f.tag
+ 	pcall(function() f.fire.Enabled = false f.smoke.Enabled = false end)
++	if f.sound then f.sound:Destroy() end
+ 	task.delay(2, function() if f.part then f.part:Destroy() end end)
+ 	if player then
+-		local reward = ctx.Util.RewardFor(player, ctx.Config.Rewards.FireOut)
+-		ctx.Util.Pay(player, reward)
+-		ctx.Systems.Radio.Popup(player, "+" .. ctx.Util.Money(reward))
++		ctx.Util.Reward(player, ctx.Config.Rewards.FireOut, "fogo")
+ 		if ctx.Systems.Reputation then ctx.Systems.Reputation.AddXP(player, 3, "fogo") end
+ 	end
+ 	ctx.Bus.Fire("FireOut", player, tag)
+diff -u src/GasStationArea__Posto__Modules__Systems__Jukebox.lua src2/GasStationArea__Posto__Modules__Systems__Jukebox.lua
+--- GasStationArea__Posto__Modules__Systems__Jukebox.lua	2026-11-12 13:14:05.796645382 +0000
++++ GasStationArea__Posto__Modules__Systems__Jukebox.lua	2026-11-12 13:24:02.335229380 +0000
+@@ -17,14 +17,8 @@
+ 	end
+ 	local st = list[idx]
+ 	if screen then screen.Text = st.Name end
+-	if st.Id ~= "" and part then
+-		sound = Instance.new("Sound")
+-		sound.SoundId = st.Id
+-		sound.Looped = true
+-		sound.Volume = ctx.Config.Jukebox.Volume
+-		sound.RollOffMaxDistance = 90
+-		sound.Parent = part
+-		sound:Play()
++	if part then
++		sound = ctx.Util.PlaySound(part, st.Id, { Looped = true, Volume = ctx.Config.Jukebox.Volume, Range = 90 })
+ 	end
+ end
+ 
+@@ -36,6 +30,8 @@
+ 	screen.Text = "DESLIGADO"
+ 	local pp = ctx.Util.Prompt(part, "Trocar estação", "Rádio da loja", 0.2)
+ 	pp.Triggered:Connect(function(player)
++		local fault = part:GetAttribute("Defeito")
++		if fault then ctx.Systems.Radio.Notify("warn", "Rádio em manutenção: " .. tostring(fault), player) return end
+ 		idx += 1
+ 		if idx > #ctx.Config.Jukebox.Stations then idx = 0 end
+ 		apply()
+diff -u src/GasStationArea__Posto__Modules__Systems__Power.lua src2/GasStationArea__Posto__Modules__Systems__Power.lua
+--- GasStationArea__Posto__Modules__Systems__Power.lua	2026-11-12 13:14:05.796723267 +0000
++++ GasStationArea__Posto__Modules__Systems__Power.lua	2026-11-12 13:24:02.335297613 +0000
+@@ -9,7 +9,7 @@
+ local generatorOn = false
+ local pumpsOffline = false
+ local breakerPrompt, generatorPrompt, terminalPrompt
+-local genSmoke
++local genSmoke, genLoop
+ local flickerToken = 0
+ 
+ local function applyMode()
+@@ -107,6 +107,8 @@
+ 		breakerPrompt = ctx.Util.Prompt(breaker, "Rearmar", "Disjuntor geral", ctx.Config.Power.BreakerHold)
+ 		breakerPrompt.Triggered:Connect(function(player)
+ 			if not breakerTripped then return end
++			local fault = breaker:GetAttribute("Defeito")
++			if fault then ctx.Systems.Radio.Notify("warn", "Disjuntor em manutenção: " .. tostring(fault), player) return end
+ 			if not generatorOn then
+ 				sparks(breaker)
+ 				ctx.Systems.Radio.Notify("danger", "Sem fonte de energia! Ligue o gerador primeiro.", player)
+@@ -121,11 +123,15 @@
+ 		generatorPrompt = ctx.Util.Prompt(gen, "Ligar gerador", "Gerador de emergência", ctx.Config.Power.GeneratorHold)
+ 		generatorPrompt.Triggered:Connect(function(player)
+ 			if mode ~= "off" or generatorOn then return end
++			local fault = gen:GetAttribute("Defeito")
++			if fault then ctx.Systems.Radio.Notify("warn", "Gerador não parte: " .. tostring(fault), player) return end
+ 			generatorOn = true
+ 			mode = "emergency"
+ 			applyMode()
+ 			refreshPrompts()
+ 			ctx.Util.PlaySound(gen, ctx.Config.Sounds.Generator, { Volume = 0.8, Range = 120 })
++			if genLoop then genLoop:Destroy() end
++			genLoop = ctx.Util.PlaySound(gen, ctx.Config.Sounds.GeneratorLoop, { Looped = true, Volume = 0.5, Range = 90 })
+ 			if not genSmoke then
+ 				genSmoke = Instance.new("Smoke")
+ 				genSmoke.Color = Color3.fromRGB(70, 70, 70)
+@@ -145,6 +151,8 @@
+ 		terminalPrompt = ctx.Util.Prompt(terminal, "Reiniciar bombas", "Terminal de bombas", ctx.Config.Power.TerminalHold)
+ 		terminalPrompt.Triggered:Connect(function(player)
+ 			if not pumpsOffline or mode ~= "on" then return end
++			local fault = terminal:GetAttribute("Defeito")
++			if fault then ctx.Systems.Radio.Notify("warn", "Terminal em manutenção: " .. tostring(fault), player) return end
+ 			pumpsOffline = false
+ 			applyMode()
+ 			refreshPrompts()
+@@ -160,7 +168,10 @@
+ 
+ -- queda geral de energia (tempestade, curto). Se needReboot, as bombas pedem reinício manual.
+ function Power.Blackout(needReboot)
+-	if mode == "off" then return end
++	-- antes: "if mode == 'off' then return end". A missão chama Ambience.Lightning (que pisca as luzes
++	-- e deixa mode = "off" por instantes) logo antes do Blackout, então o apagão era SEMPRE ignorado e a
++	-- missão ficava presa até o tempo esgotar. O estado real de apagão é o disjuntor desarmado.
++	if breakerTripped then return end
+ 	breakerTripped = true
+ 	generatorOn = false
+ 	pumpsOffline = needReboot and true or false
+@@ -188,8 +199,10 @@
+ 	generatorOn = false
+ 	mode = "on"
+ 	if genSmoke then genSmoke:Destroy() genSmoke = nil end
++	if genLoop then genLoop:Destroy() genLoop = nil end
+ 	applyMode()
+ 	refreshPrompts()
++	ctx.Util.PlaySound(ctx.Objects:FindFirstChild("BreakerPanel"), ctx.Config.Sounds.Breaker, { Volume = 0.7, Range = 60 })
+ 	ctx.Systems.Radio.Notify("success", "Energia restabelecida!", nil)
+ 	ctx.Bus.Fire("BreakerReset", player)
+ 	ctx.Bus.Fire("PowerRestored", player)
+@@ -197,7 +210,9 @@
+ 
+ -- piscada curta (efeito de tempestade/curto) sem derrubar a energia
+ function Power.Flicker(times)
+-	if mode ~= "on" then return end
++	-- não pisca durante um apagão em andamento: o flicker cancelava a sequência do Blackout (token)
++	-- e deixava o posto com disjuntor desarmado, energia "on" e o gerador sem prompt (missão presa)
++	if mode ~= "on" or breakerTripped then return end
+ 	flickerToken += 1
+ 	local my = flickerToken
+ 	task.spawn(function()
+diff -u src/GasStationArea__Posto__Modules__Systems__Pumps.lua src2/GasStationArea__Posto__Modules__Systems__Pumps.lua
+--- GasStationArea__Posto__Modules__Systems__Pumps.lua	2026-11-12 13:14:05.796870087 +0000
++++ GasStationArea__Posto__Modules__Systems__Pumps.lua	2026-11-12 13:24:02.335386465 +0000
+@@ -52,6 +52,7 @@
+ 
+ local function statusText(p)
+ 	if p.state == "broken" then return "FORA DE SERVIÇO", Color3.fromRGB(255, 70, 60) end
++	if p.anchor:GetAttribute("Defeito") then return "MANUTENÇÃO", Color3.fromRGB(255, 190, 40) end
+ 	if p.state == "leak" or p.state == "valve" or p.state == "fire" then return "VAZAMENTO!", Color3.fromRGB(255, 190, 40) end
+ 	if Pumps.Reserve() <= 0 then return "SEM COMBUSTÍVEL", Color3.fromRGB(255, 190, 40) end
+ 	if not ctx.State.Get("PumpsOnline") then return "SEM ENERGIA", Color3.fromRGB(255, 70, 60) end
+@@ -60,6 +61,8 @@
+ 
+ local function serviceable(p)
+ 	if p.state ~= "ok" then return false, "Bomba interditada" end
++	local fault = p.anchor:GetAttribute("Defeito")
++	if fault then return false, "Manutenção: " .. tostring(fault) end
+ 	if ctx.State.Get("PumpsOnline") == false then return false, "Bombas sem energia" end
+ 	if Pumps.Reserve() <= 0 then return false, "Sem combustível no tanque" end
+ 	return true
+@@ -197,9 +200,7 @@
+ 	ctx.Systems.Alarm.Set("leak" .. p.id, false)
+ 	ctx.Util.PlaySound(p.valvePart or p.anchor, ctx.Config.Sounds.Valve, { Volume = 0.8, Range = 60 })
+ 	if player then
+-		local reward = ctx.Util.RewardFor(player, ctx.Config.Rewards.Valve)
+-		ctx.Util.Pay(player, reward)
+-		ctx.Systems.Radio.Popup(player, "+" .. ctx.Util.Money(reward))
++		ctx.Util.Reward(player, ctx.Config.Rewards.Valve, "valvula")
+ 		if ctx.Systems.Reputation then ctx.Systems.Reputation.AddXP(player, 4, "válvula") end
+ 	end
+ 	Pumps.Refresh()
+@@ -214,9 +215,7 @@
+ 	if p.cleanPrompt then p.cleanPrompt:Destroy() p.cleanPrompt = nil end
+ 	removeVapor(p)
+ 	if player then
+-		local reward = ctx.Util.RewardFor(player, ctx.Config.Rewards.Puddle)
+-		ctx.Util.Pay(player, reward)
+-		ctx.Systems.Radio.Popup(player, "+" .. ctx.Util.Money(reward))
++		ctx.Util.Reward(player, ctx.Config.Rewards.Puddle, "limpeza")
+ 		if ctx.Systems.Reputation then ctx.Systems.Reputation.AddXP(player, 4, "limpeza") end
+ 	end
+ 	Pumps.Refresh()
+@@ -373,7 +372,8 @@
+ 			if reserve < 1 then notify("warn", "Tanque vazio. Aguarde o caminhão-tanque.", player) return end
+ 			local liters = math.min(missing, reserve)
+ 			local cost = liters * Pumps.PriceFor(player)
+-			if not ctx.Util.Charge(player, cost) then
++			local paidOk, charged = ctx.Util.Charge(player, cost, "combustivel")
++			if not paidOk then
+ 				notify("danger", "Dinheiro insuficiente: precisa de " .. ctx.Util.Money(math.ceil(cost)) .. ".", player)
+ 				return
+ 			end
+@@ -382,8 +382,9 @@
+ 			Pumps.TakeFuel(liters)
+ 			ctx.State.Add("Cash", math.floor(cost))
+ 			animateDisplay(p, liters, cost)
++			ctx.Util.PlaySound(anchor, ctx.Config.Sounds.PumpBeep, { Volume = 0.6, Range = 50 })
+ 			ctx.Util.PlaySound(anchor, ctx.Config.Sounds.Fuel, { Volume = 0.7, Range = 60 })
+-			ctx.Systems.Radio.Popup(player, "-" .. ctx.Util.Money(math.ceil(cost)), "info")
++			if charged > 0 then ctx.Systems.Radio.Popup(player, "-" .. ctx.Util.Money(charged), "info") end
+ 			if ctx.Systems.Reputation then ctx.Systems.Reputation.AddXP(player, 2, "abastecer") end
+ 			ctx.Bus.Fire("JerrycanFilled", player, liters, can)
+ 		end)
+@@ -396,7 +397,7 @@
+ 				return
+ 			end
+ 			local price = cfg.JerrycanPrice
+-			if not ctx.Util.Charge(player, price) then
++			if not ctx.Util.Charge(player, price, "galao") then
+ 				notify("danger", "Dinheiro insuficiente (" .. ctx.Util.Money(price) .. ").", player)
+ 				return
+ 			end
+@@ -410,9 +411,13 @@
+ 			p.valvePrompt = ctx.Util.Prompt(bestV, "Fechar válvula", "Válvula de emergência", ctx.Config.Pumps.ValveHold, nil, 9)
+ 			p.valvePrompt.Enabled = false
+ 			p.valvePrompt.Triggered:Connect(function(player)
++				local fault = bestV:GetAttribute("Defeito")
++				if fault then notify("warn", "Válvula emperrada: " .. tostring(fault) .. ". Corrija antes.", player) return end
+ 				Pumps.CloseValve(idx, player)
+ 			end)
+ 		end
++		-- defeitos aplicados pela inspeção (atributo "Defeito") mudam o estado real da bomba
++		anchor:GetAttributeChangedSignal("Defeito"):Connect(function() Pumps.Refresh() end)
+ 		table.insert(list, p)
+ 	end
+ 
+diff -u src/GasStationArea__Posto__Modules__Systems__Reputation.lua src2/GasStationArea__Posto__Modules__Systems__Reputation.lua
+--- GasStationArea__Posto__Modules__Systems__Reputation.lua	2026-11-12 13:14:05.796953426 +0000
++++ GasStationArea__Posto__Modules__Systems__Reputation.lua	2026-11-12 13:24:02.335458313 +0000
+@@ -49,12 +49,17 @@
+ 
+ local function load(player)
+ 	local xp = 0
++	local okLoad = true
+ 	if store then
+ 		local ok, v = pcall(function() return store:GetAsync("u" .. player.UserId) end)
+ 		if ok and type(v) == "number" then xp = v end
++		okLoad = ok
++		if not ok then warn("[Posto] reputação não carregou para " .. player.Name .. "; não será salva nesta sessão: " .. tostring(v)) end
+ 	end
++	if not player.Parent then return end
+ 	apply(player, xp)
+-	loaded[player] = true
++	-- se a leitura falhou, NÃO marca como carregado: evita sobrescrever o XP salvo com 0 + XP da sessão
++	loaded[player] = okLoad
+ end
+ 
+ function Reputation.Init(c)
+diff -u src/GasStationArea__Posto__Modules__Systems__Shop.lua src2/GasStationArea__Posto__Modules__Systems__Shop.lua
+--- GasStationArea__Posto__Modules__Systems__Shop.lua	2026-11-12 13:14:05.797353593 +0000
++++ GasStationArea__Posto__Modules__Systems__Shop.lua	2026-11-12 13:24:02.335492044 +0000
+@@ -60,17 +60,23 @@
+ 	end
+ 	if s.stock <= 0 then notify("warn", "Produto esgotado.", player) return end
+ 	local price = priceFor(player, s.item)
+-	if not ctx.Util.Charge(player, price) then
++	local okPay, charged = ctx.Util.Charge(player, price, "loja:" .. s.item.id)
++	if not okPay then
+ 		notify("danger", "Dinheiro insuficiente (" .. ctx.Util.Money(price) .. ").", player)
+ 		return
+ 	end
+ 	local tool = ctx.Systems.Tools.Give(player, s.item.id)
+-	if not tool then ctx.Util.Pay(player, price) return end
++	if not tool then
++		if charged > 0 then ctx.Util.Pay(player, charged, "estorno") end
++		return
++	end
+ 	s.stock -= 1
+ 	s.model:SetAttribute("Stock", s.stock)
+ 	ctx.State.Add("Cash", price)
+-	ctx.Systems.Radio.Popup(player, "-" .. ctx.Util.Money(price), "info")
++	if charged > 0 then ctx.Systems.Radio.Popup(player, "-" .. ctx.Util.Money(charged), "info") end
+ 	ctx.Util.PlaySound(s.part, ctx.Config.Sounds.Purchase, { Volume = 0.6, Range = 50 })
++	local reg = ctx.Objects:FindFirstChild("CashierSpot")
++	if reg then ctx.Util.PlaySound(reg, ctx.Config.Sounds.Register, { Volume = 0.5, Range = 50 }) end
+ 	if ctx.Systems.Reputation then ctx.Systems.Reputation.AddXP(player, s.item.xp or math.max(1, math.floor(price / 25)), "compra") end
+ 	refreshSlot(s)
+ 	ctx.Bus.Fire("Purchased", player, s.item.id, price)
+diff -u src/GasStationArea__Posto__Modules__Systems__Tools.lua src2/GasStationArea__Posto__Modules__Systems__Tools.lua
+--- GasStationArea__Posto__Modules__Systems__Tools.lua	2026-11-12 13:14:05.797464880 +0000
++++ GasStationArea__Posto__Modules__Systems__Tools.lua	2026-11-12 13:24:02.335588677 +0000
+@@ -334,19 +334,23 @@
+ 
+ kinds.zoom = function(tool, def, handle)
+ 	local on = false
++	local holder
+ 	local function set(v, player)
+ 		on = v
+ 		if player then player:SetAttribute("PostoZoom", v) end
+ 	end
+ 	tool.Activated:Connect(function()
+ 		local player = ownerOf(tool)
+-		if player then set(not on, player) end
++		if player then
++			holder = player
++			set(not on, player)
++		end
+ 	end)
++	-- desliga o zoom SÓ de quem estava usando (antes zerava o zoom de todos os jogadores do servidor)
+ 	tool.Unequipped:Connect(function()
+-		local player = Players:GetPlayerFromCharacter(tool.Parent and tool.Parent.Parent or nil)
+ 		if on then
+ 			on = false
+-			for _, p in ipairs(Players:GetPlayers()) do p:SetAttribute("PostoZoom", false) end
++			if holder and holder.Parent then holder:SetAttribute("PostoZoom", false) end
+ 		end
+ 	end)
+ end
+@@ -362,17 +366,25 @@
+ 		local roll = math.random(1, 100)
+ 		if roll <= 55 then
+ 			local v = math.random(15, 70)
+-			ctx.Util.Pay(player, v)
+-			ctx.Systems.Radio.Popup(player, "+" .. ctx.Util.Money(v))
+-			notify("success", "A sacola tinha " .. ctx.Util.Money(v) .. "!", player)
++			local paid = ctx.Util.Pay(player, v, "sacola")
++			if paid > 0 then
++				ctx.Systems.Radio.Popup(player, "+" .. ctx.Util.Money(paid))
++				notify("success", "A sacola tinha " .. ctx.Util.Money(paid) .. "!", player)
++			else
++				notify("info", "A sacola tinha um vale de " .. ctx.Util.Money(v) .. " (pagamento pendente da economia principal).", player)
++			end
+ 		elseif roll <= 85 then
+ 			ctx.Systems.Tools.Give(player, "cola")
+ 			notify("success", "Dentro da sacola: uma Cola Gelada!", player)
+ 		elseif roll <= 97 then
+ 			local v = math.random(80, 160)
+-			ctx.Util.Pay(player, v)
+-			ctx.Systems.Radio.Popup(player, "+" .. ctx.Util.Money(v))
+-			notify("success", "SORTE GRANDE! " .. ctx.Util.Money(v) .. " na sacola!", player)
++			local paid = ctx.Util.Pay(player, v, "sacola")
++			if paid > 0 then
++				ctx.Systems.Radio.Popup(player, "+" .. ctx.Util.Money(paid))
++				notify("success", "SORTE GRANDE! " .. ctx.Util.Money(paid) .. " na sacola!", player)
++			else
++				notify("info", "SORTE GRANDE! Vale de " .. ctx.Util.Money(v) .. " (pagamento pendente da economia principal).", player)
++			end
+ 		else
+ 			notify("info", "A sacola estava vazia... fica pra próxima.", player)
+ 		end
+@@ -550,6 +562,8 @@
+ 		if o:IsA("BasePart") and o.Name:match("^FireLocker") then
+ 			local pp = ctx.Util.Prompt(o, "Pegar / recarregar extintor", "Armário de emergência", 0.7)
+ 			pp.Triggered:Connect(function(player)
++				local fault = o:GetAttribute("Defeito")
++				if fault then notify("warn", "Armário interditado: " .. tostring(fault) .. ". Corrija antes.", player) return end
+ 				local have = Tools.Find(player, "extinguisher")
+ 				if have then
+ 					if (have:GetAttribute("Charge") or 0) >= ctx.Config.Fire.ExtinguisherCharge then
+diff -u src/GasStationArea__Posto__Modules__Util.lua src2/GasStationArea__Posto__Modules__Util.lua
+--- GasStationArea__Posto__Modules__Util.lua	2026-11-12 13:14:05.796027688 +0000
++++ GasStationArea__Posto__Modules__Util.lua	2026-11-12 13:24:02.335045434 +0000
+@@ -6,61 +6,107 @@
+ 
+ local Util = {}
+ local ctx
++local provider     -- integração com a economia principal (Util.SetEconomyProvider)
+ 
+ function Util.Init(c) ctx = c end
+ 
+ -- ===== som =====
++-- Nunca lança erro: ID vazio, numérico, inválido ou parent ausente devolvem nil.
+ function Util.PlaySound(parent, id, opts)
+-	if not id or id == "" then return nil end
++	if type(id) == "number" then id = "rbxassetid://" .. id end
++	if type(id) ~= "string" or id == "" or not parent then return nil end
+ 	opts = opts or {}
+-	local s = Instance.new("Sound")
+-	s.SoundId = id
+-	s.Volume = opts.Volume or 0.6
+-	s.Looped = opts.Looped or false
+-	s.RollOffMaxDistance = opts.Range or 140
+-	s.PlaybackSpeed = opts.Pitch or 1
+-	s.Parent = parent
+-	s:Play()
+-	if not s.Looped then Debris:AddItem(s, opts.Life or 20) end
+-	return s
++	local ok, s = pcall(function()
++		local s = Instance.new("Sound")
++		s.SoundId = id
++		s.Volume = opts.Volume or 0.6
++		s.Looped = opts.Looped or false
++		s.RollOffMaxDistance = opts.Range or 140
++		s.PlaybackSpeed = opts.Pitch or 1
++		s.Parent = parent
++		s:Play()
++		if not s.Looped then Debris:AddItem(s, opts.Life or 20) end
++		return s
++	end)
++	if ok then return s end
++	warn("[Posto] som não pôde tocar (" .. tostring(id) .. "): " .. tostring(s))
++	return nil
+ end
+ 
+--- ===== dinheiro =====
++-- ===== dinheiro: interface isolada com a economia principal (desativada por padrão) =====
++local function eco() return ctx.Config.Economy end
++local function live() return eco().Enabled == true end
++
++-- registra a economia do jogo: { Pay = fn(p, v, motivo) -> pago, Charge = fn(p, v, motivo) -> ok, Balance = fn(p) -> n }
++function Util.SetEconomyProvider(p) provider = p end
++function Util.EconomyEnabled() return live() end
++
++-- valor de leaderstats já existente (o posto NUNCA cria leaderstats/Dinheiro). Pode devolver nil.
+ function Util.Stat(player)
+-	local name = ctx.Config.Economy.Stat
+-	local ls = player:FindFirstChild("leaderstats")
+-	if not ls then
+-		ls = Instance.new("Folder")
+-		ls.Name = "leaderstats"
+-		ls.Parent = player
+-	end
+-	local v = ls:FindFirstChild(name)
+-	if not v then
+-		v = Instance.new("IntValue")
+-		v.Name = name
+-		v.Parent = ls
+-	end
+-	return v
++	local ls = player and player:FindFirstChild("leaderstats")
++	local v = ls and ls:FindFirstChild(eco().Stat)
++	if v and (v:IsA("IntValue") or v:IsA("NumberValue")) then return v end
++	return nil
+ end
+ 
+-function Util.Balance(player) return Util.Stat(player).Value end
++function Util.Balance(player)
++	if not live() then return 0 end
++	if eco().Provider == "custom" then
++		if provider and provider.Balance then
++			local ok, n = pcall(provider.Balance, player)
++			return ok and tonumber(n) or 0
++		end
++		return 0
++	end
++	local v = Util.Stat(player)
++	return v and v.Value or 0
++end
+ 
+-function Util.Pay(player, amount)
+-	if not player or not player.Parent then return end
++-- credita ao jogador. Devolve o valor efetivamente pago (0 com a economia desativada).
++function Util.Pay(player, amount, reason)
++	if not player or not player.Parent or type(amount) ~= "number" then return 0 end
+ 	amount = math.floor(amount)
+-	if amount == 0 then return end
++	if amount <= 0 then return 0 end
++	ctx.Bus.Fire("RewardEarned", player, amount, reason)
++	if not live() then return 0 end
++	if eco().Provider == "custom" then
++		if not (provider and provider.Pay) then return 0 end
++		local ok, paid = pcall(provider.Pay, player, amount, reason)
++		if not ok then warn("[Posto] erro no provedor de economia (Pay): " .. tostring(paid)) return 0 end
++		return tonumber(paid) or 0
++	end
+ 	local v = Util.Stat(player)
+-	v.Value = math.max(0, v.Value + amount)
++	if not v then return 0 end
++	v.Value += amount
++	return amount
+ end
+ 
+--- cobra do jogador; devolve false se faltar dinheiro
+-function Util.Charge(player, amount)
++-- cobra do jogador. Devolve (ok, valorCobrado). Com a economia desativada segue PurchasesWhenDisabled.
++function Util.Charge(player, amount, reason)
+ 	amount = math.ceil(amount)
+-	if amount <= 0 then return true end
++	if amount <= 0 then return true, 0 end
++	if not live() then
++		return eco().PurchasesWhenDisabled ~= "blocked", 0
++	end
++	if eco().Provider == "custom" then
++		if not (provider and provider.Charge) then return false, 0 end
++		local ok, res = pcall(provider.Charge, player, amount, reason)
++		if not ok then warn("[Posto] erro no provedor de economia (Charge): " .. tostring(res)) return false, 0 end
++		if res then return true, amount end
++		return false, 0
++	end
+ 	local v = Util.Stat(player)
+-	if v.Value < amount then return false end
++	if not v or v.Value < amount then return false, 0 end
+ 	v.Value -= amount
+-	return true
++	return true, amount
++end
++
++-- recompensa completa: bônus de reputação + pagamento + popup só se algo foi pago. Devolve o valor pago.
++function Util.Reward(player, base, reason)
++	if not player then return 0 end
++	local paid = Util.Pay(player, Util.RewardFor(player, base), reason)
++	if paid > 0 and ctx.Systems.Radio then ctx.Systems.Radio.Popup(player, "+" .. Util.Money(paid)) end
++	return paid
+ end
+ 
+ function Util.Money(n)
+@@ -17,33 +17,33 @@
+ Script	GasStationArea/Gas Station/GasPump/Script/PlayerDamageScript	12	disabled=true	RBXF3E0E79679E144969E03BB44A859EF3D	GasStationArea__Gas_Station__GasPump__Script__PlayerDamageScript.lua
+ Script	GasStationArea/Gas Station/GasPump/Script	51	disabled=true	RBX4FDABBF05E5C4FB1B56DD1D5AA9DC543	GasStationArea__Gas_Station__GasPump__Script.lua
+ Script	GasStationArea/Gas Station/GasPump/Script/PlayerDamageScript	12	disabled=true	RBX66BF215D633C4DECA65992214C2074C5	GasStationArea__Gas_Station__GasPump__Script__PlayerDamageScript.lua
+-Script	GasStationArea/Posto/Core	145	disabled=false	RBX013675541D8A4E06A83D506F4289DC6D	GasStationArea__Posto__Core.lua
++Script	GasStationArea/Posto/Core	166	disabled=false	RBX013675541D8A4E06A83D506F4289DC6D	GasStationArea__Posto__Core.lua
+ ModuleScript	GasStationArea/Posto/Modules/Bus	25	disabled=	RBXA9FF8B65A45C4764867DB8DB41849F1C	GasStationArea__Posto__Modules__Bus.lua
+-ModuleScript	GasStationArea/Posto/Modules/Config	177	disabled=	RBX1CD42EA7F855410BAEF01603502A1361	GasStationArea__Posto__Modules__Config.lua
+-ModuleScript	GasStationArea/Posto/Modules/Missions	219	disabled=	RBX55D15D3AD1114C11AB794B7AE5C800F6	GasStationArea__Posto__Modules__Missions.lua
++ModuleScript	GasStationArea/Posto/Modules/Config	221	disabled=	RBX1CD42EA7F855410BAEF01603502A1361	GasStationArea__Posto__Modules__Config.lua
++ModuleScript	GasStationArea/Posto/Modules/Missions	234	disabled=	RBX55D15D3AD1114C11AB794B7AE5C800F6	GasStationArea__Posto__Modules__Missions.lua
+ ModuleScript	GasStationArea/Posto/Modules/State	20	disabled=	RBX1A5208CD424241028E1495A81CF1AA6A	GasStationArea__Posto__Modules__State.lua
+-ModuleScript	GasStationArea/Posto/Modules/Util	322	disabled=	RBX1FCEC1FE4B984F7C95AF7AAE97A3BD32	GasStationArea__Posto__Modules__Util.lua
++ModuleScript	GasStationArea/Posto/Modules/Util	368	disabled=	RBX1FCEC1FE4B984F7C95AF7AAE97A3BD32	GasStationArea__Posto__Modules__Util.lua
+ ModuleScript	GasStationArea/Posto/Modules/Systems/Alarm	87	disabled=	RBX713F853E26D94353BAF1040248307076	GasStationArea__Posto__Modules__Systems__Alarm.lua
+ ModuleScript	GasStationArea/Posto/Modules/Systems/Ambience	70	disabled=	RBX44C09E86414447AFA31100814F29E905	GasStationArea__Posto__Modules__Systems__Ambience.lua
+-ModuleScript	GasStationArea/Posto/Modules/Systems/Customers	251	disabled=	RBXCF87CA911ABD44C3BAC080C2673235B8	GasStationArea__Posto__Modules__Systems__Customers.lua
++ModuleScript	GasStationArea/Posto/Modules/Systems/Customers	259	disabled=	RBXCF87CA911ABD44C3BAC080C2673235B8	GasStationArea__Posto__Modules__Systems__Customers.lua
+ ModuleScript	GasStationArea/Posto/Modules/Systems/Fire	142	disabled=	RBX6B5E6099E01A4F22B50DCB77E3E62CD5	GasStationArea__Posto__Modules__Systems__Fire.lua
+-ModuleScript	GasStationArea/Posto/Modules/Systems/Jukebox	49	disabled=	RBX31F2B0FE82D2456EA9F833E2B4860312	GasStationArea__Posto__Modules__Systems__Jukebox.lua
++ModuleScript	GasStationArea/Posto/Modules/Systems/Jukebox	45	disabled=	RBX31F2B0FE82D2456EA9F833E2B4860312	GasStationArea__Posto__Modules__Systems__Jukebox.lua
+ ModuleScript	GasStationArea/Posto/Modules/Systems/Npc	209	disabled=	RBX73ED9CDEBFEA400F9945C6C6B4F2D706	GasStationArea__Posto__Modules__Systems__Npc.lua
+-ModuleScript	GasStationArea/Posto/Modules/Systems/Power	230	disabled=	RBX9262F7BBE68D41DBB1B35C9FD640F650	GasStationArea__Posto__Modules__Systems__Power.lua
++ModuleScript	GasStationArea/Posto/Modules/Systems/Power	245	disabled=	RBX9262F7BBE68D41DBB1B35C9FD640F650	GasStationArea__Posto__Modules__Systems__Power.lua
+ ModuleScript	GasStationArea/Posto/Modules/Systems/Props	116	disabled=	RBX52346D3DD2B1449C8F4BA00C66733637	GasStationArea__Posto__Modules__Systems__Props.lua
+-ModuleScript	GasStationArea/Posto/Modules/Systems/Pumps	441	disabled=	RBX134D8388B1D34E7585D5379EE12C8DE2	GasStationArea__Posto__Modules__Systems__Pumps.lua
++ModuleScript	GasStationArea/Posto/Modules/Systems/Pumps	446	disabled=	RBX134D8388B1D34E7585D5379EE12C8DE2	GasStationArea__Posto__Modules__Systems__Pumps.lua
+ ModuleScript	GasStationArea/Posto/Modules/Systems/Radio	41	disabled=	RBX86EC40A3E0F74EFBAE294551594D1ED4	GasStationArea__Posto__Modules__Systems__Radio.lua
+-ModuleScript	GasStationArea/Posto/Modules/Systems/Reputation	80	disabled=	RBXF5858DB6A1324B8AB4A8B00448956FCA	GasStationArea__Posto__Modules__Systems__Reputation.lua
+-ModuleScript	GasStationArea/Posto/Modules/Systems/Shop	212	disabled=	RBX25490E051FEE4AB783BFBB3BA074093B	GasStationArea__Posto__Modules__Systems__Shop.lua
++ModuleScript	GasStationArea/Posto/Modules/Systems/Reputation	85	disabled=	RBXF5858DB6A1324B8AB4A8B00448956FCA	GasStationArea__Posto__Modules__Systems__Reputation.lua
++ModuleScript	GasStationArea/Posto/Modules/Systems/Shop	218	disabled=	RBX25490E051FEE4AB783BFBB3BA074093B	GasStationArea__Posto__Modules__Systems__Shop.lua
+ ModuleScript	GasStationArea/Posto/Modules/Systems/Sign	73	disabled=	RBX3D547F237A3947E88FAB010B59347BC2	GasStationArea__Posto__Modules__Systems__Sign.lua
+-ModuleScript	GasStationArea/Posto/Modules/Systems/Tools	572	disabled=	RBX64AEEEDA7C1D40258ACC2A3ED3745EA6	GasStationArea__Posto__Modules__Systems__Tools.lua
+-ModuleScript	GasStationArea/Posto/MissionDefs/_Template	26	disabled=	RBX14A37655563D41209DB339FFC90CE132	GasStationArea__Posto__MissionDefs___Template.lua
+-ModuleScript	GasStationArea/Posto/MissionDefs/blackout	46	disabled=	RBXA346044A7A614532935DE1AE57BC11D3	GasStationArea__Posto__MissionDefs__blackout.lua
+-ModuleScript	GasStationArea/Posto/MissionDefs/fuel_leak	67	disabled=	RBX460C9DA963674DDE81CAF5350DC6B7FC	GasStationArea__Posto__MissionDefs__fuel_leak.lua
+-ModuleScript	GasStationArea/Posto/MissionDefs/inspection	66	disabled=	RBX67B84C84FC9241DAA95E84B3A5A302E3	GasStationArea__Posto__MissionDefs__inspection.lua
+-ModuleScript	GasStationArea/Posto/MissionDefs/robbery	171	disabled=	RBX62046DCCB9FA4C28A124D08235A8935B	GasStationArea__Posto__MissionDefs__robbery.lua
+-ModuleScript	GasStationArea/Posto/MissionDefs/rush	57	disabled=	RBX5991A35565DD4EE7BA013A79D95DB2EE	GasStationArea__Posto__MissionDefs__rush.lua
+-ModuleScript	GasStationArea/Posto/MissionDefs/stock	67	disabled=	RBX2F03B9254A1F49679BB9E22690F6397C	GasStationArea__Posto__MissionDefs__stock.lua
+-ModuleScript	GasStationArea/Posto/MissionDefs/stranded	103	disabled=	RBXE1F91F92AD9940BCB61C2CF42D21E5D7	GasStationArea__Posto__MissionDefs__stranded.lua
+-ModuleScript	GasStationArea/Posto/MissionDefs/tanker	154	disabled=	RBX776A94CDFC294D7B8B288867C56175CA	GasStationArea__Posto__MissionDefs__tanker.lua
+-LocalScript	GasStationArea/Posto/Client/PostoHUD	429	disabled=false	RBX31603DA54D5C4F39B71D0DCA134B61CD	GasStationArea__Posto__Client__PostoHUD.lua
+\ No newline at end of file
++ModuleScript	GasStationArea/Posto/Modules/Systems/Tools	586	disabled=	RBX64AEEEDA7C1D40258ACC2A3ED3745EA6	GasStationArea__Posto__Modules__Systems__Tools.lua
++ModuleScript	GasStationArea/Posto/MissionDefs/_Template	28	disabled=	RBX14A37655563D41209DB339FFC90CE132	GasStationArea__Posto__MissionDefs___Template.lua
++ModuleScript	GasStationArea/Posto/MissionDefs/blackout	50	disabled=	RBXA346044A7A614532935DE1AE57BC11D3	GasStationArea__Posto__MissionDefs__blackout.lua
++ModuleScript	GasStationArea/Posto/MissionDefs/fuel_leak	77	disabled=	RBX460C9DA963674DDE81CAF5350DC6B7FC	GasStationArea__Posto__MissionDefs__fuel_leak.lua
++ModuleScript	GasStationArea/Posto/MissionDefs/inspection	130	disabled=	RBX67B84C84FC9241DAA95E84B3A5A302E3	GasStationArea__Posto__MissionDefs__inspection.lua
++ModuleScript	GasStationArea/Posto/MissionDefs/robbery	236	disabled=	RBX62046DCCB9FA4C28A124D08235A8935B	GasStationArea__Posto__MissionDefs__robbery.lua
++ModuleScript	GasStationArea/Posto/MissionDefs/rush	68	disabled=	RBX5991A35565DD4EE7BA013A79D95DB2EE	GasStationArea__Posto__MissionDefs__rush.lua
++ModuleScript	GasStationArea/Posto/MissionDefs/stock	94	disabled=	RBX2F03B9254A1F49679BB9E22690F6397C	GasStationArea__Posto__MissionDefs__stock.lua
++ModuleScript	GasStationArea/Posto/MissionDefs/stranded	104	disabled=	RBXE1F91F92AD9940BCB61C2CF42D21E5D7	GasStationArea__Posto__MissionDefs__stranded.lua
++ModuleScript	GasStationArea/Posto/MissionDefs/tanker	166	disabled=	RBX776A94CDFC294D7B8B288867C56175CA	GasStationArea__Posto__MissionDefs__tanker.lua
++LocalScript	GasStationArea/Posto/Client/PostoHUD	464	disabled=false	RBX31603DA54D5C4F39B71D0DCA134B61CD	GasStationArea__Posto__Client__PostoHUD.lua
+\ No newline at end of file
